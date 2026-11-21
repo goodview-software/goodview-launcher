@@ -9,6 +9,7 @@ const Ollama := preload("res://core/ollama.gd")
 const Attach := preload("res://core/attach.gd")
 const LabTools := preload("res://core/lab_tools.gd")
 const Orchestra := preload("res://core/orchestra.gd")
+const Sketch := preload("res://ui/sketch.gd")
 const MAX_TOOL_ROUNDS := 4
 const FILE := "user://board.json"  # ancien fichier unique (migré vers le plan 1)
 const PLANS_DIR := "user://boards/"
@@ -69,6 +70,7 @@ var plan_id := ""
 var frames: Array = []  # cadres {id,x,y,w,h,title,color}
 var fnodes := {}
 var search_e: LineEdit
+var sketch  # couche de dessin (ui/sketch.gd)
 var _rename: ConfirmationDialog
 var _rename_e: LineEdit
 var _deb := {}  # zones en débat
@@ -141,6 +143,8 @@ func build() -> void:
 	search_e.text_changed.connect(_apply_search)
 	search_e.text_submitted.connect(func(_t: String): _goto_first_match())
 	canvas.add_child(search_e)
+	sketch = Sketch.new(self)
+	sketch.attach(canvas, world)
 	_rename = ConfirmationDialog.new()
 	_rename.title = "Renommer le plan"
 	_rename.set_meta("k_nolint", true)
@@ -233,6 +237,8 @@ func _touch() -> void:
 	_save_t = 0.0
 	if canvas != null:
 		canvas.queue_redraw()
+	if sketch != null:
+		sketch.redraw()
 
 
 func _refresh_all() -> void:
@@ -308,6 +314,8 @@ func _input(e: InputEvent) -> void:
 		if zone_at(c2w(cp)) != "" and not e.ctrl_pressed and zoom >= LOD:
 			return
 		zoom_at(cp, 1.12 if e.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.12)
+		get_viewport().set_input_as_handled()
+	elif e is InputEventKey and e.pressed and sketch != null and sketch.key(e):
 		get_viewport().set_input_as_handled()
 	elif e is InputEventKey and e.pressed and e.keycode == KEY_F and (e.ctrl_pressed or e.meta_pressed):
 		_toggle_search()
@@ -762,6 +770,8 @@ func _clear_nodes() -> void:
 	links = []
 	frames = []
 	imgs.clear()
+	if sketch != null:
+		sketch.clear()
 
 
 func switch_plan(id: String) -> void:
@@ -974,7 +984,7 @@ func _save() -> void:
 	_save_t = 0.0
 	var f := FileAccess.open(_plan_file(), FileAccess.WRITE)
 	if f != null:
-		f.store_string(JSON.stringify({"zones": zones, "links": links, "frames": frames, "pan": [pan.x, pan.y], "zoom": zoom}))
+		f.store_string(JSON.stringify({"zones": zones, "links": links, "frames": frames, "shapes": sketch.to_save(), "pan": [pan.x, pan.y], "zoom": zoom}))
 
 
 func _load() -> void:
@@ -985,6 +995,7 @@ func _load() -> void:
 		zones = v.get("zones", [])
 		links = v.get("links", [])
 		frames = v.get("frames", [])
+		sketch.load_shapes(v.get("shapes", []))
 		var p = v.get("pan", [24, 24])
 		pan = Vector2(float(p[0]), float(p[1]))
 		zoom = clampf(float(v.get("zoom", 1.0)), ZMIN, ZMAX)
@@ -1031,6 +1042,8 @@ class Canvas extends Control:
 	func _draw() -> void:
 		if board == null:
 			return
+		if board.sketch != null and board.sketch.has_bound():
+			board.sketch.redraw()  # flèches collées : suivent les zones déplacées
 		var T = board.T
 		var gs: float = 24.0 * board.zoom
 		while gs < 12.0:
@@ -1114,8 +1127,13 @@ class Canvas extends Control:
 					if Rect2(pts[14] - Vector2(34, 9), Vector2(68, 18)).has_point(e.position):
 						board.cycle_link(i)  # clic : change le type du fil (nourrit / critique / compare / fusionne)
 						return
+				if board.sketch.sel_press(e.position, e.double_click):
+					return
 				panning = true
 			else:
+				if board.sketch.dragging:
+					board.sketch.sel_release(e.position)
+					return
 				if board.drag_from != "":
 					board.add_link(board.drag_from, board.zone_at(board.c2w(e.position), board.drag_from))
 					board.drag_from = ""
@@ -1124,7 +1142,9 @@ class Canvas extends Control:
 					panning = false
 					board._touch()
 		elif e is InputEventMouseMotion:
-			if board.drag_from != "":
+			if board.sketch.dragging:
+				board.sketch.sel_motion(e.position)
+			elif board.drag_from != "":
 				board.drag_pos = e.position
 				queue_redraw()
 			elif panning:
