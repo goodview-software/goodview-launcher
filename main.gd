@@ -302,6 +302,7 @@ var home_anim := "wait"
 
 func _ready() -> void:
 	_load_state()
+	_write_shared_profile()  # le profil partagé reflète toujours le choix du launcher
 	_build_ui()
 	_refresh_account()
 	_show_home()
