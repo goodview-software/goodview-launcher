@@ -23,19 +23,23 @@ static func schema() -> Array:
 		"vers": {"type": "string", "description": "id ou texte du nœud d'arrivée"},
 		"texte": {"type": "string", "description": "Étiquette de la flèche (optionnel)"}}, "required": ["de", "vers"]}
 	return [
-		_fn("creer_diagramme", "Crée un schéma complet (nœuds + flèches) avec mise en page automatique. À préférer pour tout schéma, organigramme, plan, arbre d'étapes.",
+		_fn("creer_diagramme", "Crée un NOUVEAU schéma complet (nœuds + flèches) avec mise en page automatique. Pour un schéma, organigramme, plan, arbre d'étapes. N'utilise PAS cet outil pour ajouter à un schéma existant (utilise ajouter_etape).",
 			{"noeuds": {"type": "array", "items": node, "description": "Les nœuds du schéma"},
 			"liens": {"type": "array", "items": link, "description": "Les flèches entre nœuds"},
 			"disposition": {"type": "string", "enum": ["arbre", "ligne", "grille"], "description": "arbre (haut vers bas, défaut), ligne (gauche vers droite) ou grille"}}, ["noeuds"]),
+		_fn("lire_zones", "Lit les zones de chat du plan (titres, synthèses, derniers échanges, fils entre zones). À appeler pour schématiser la réflexion, les étapes de raisonnement ou le contenu du plan.", {}, []),
 		_fn("lister_elements", "Liste les éléments du tableau (id, type, texte). À appeler avant de modifier ou supprimer.", {}, []),
-		_fn("ajouter_forme", "Ajoute une forme avec du texte.",
-			{"type": {"type": "string", "enum": SHAPES}, "texte": {"type": "string"}}, ["type", "texte"]),
+		_fn("ajouter_etape", "Ajoute UN nœud à un schéma existant, placé automatiquement juste après l'élément « apres », et relié à lui par une flèche.",
+			{"texte": {"type": "string", "description": "Texte du nouveau nœud"},
+			"apres": {"type": "string", "description": "id ou texte de l'élément après lequel l'ajouter (vide : nœud isolé)"},
+			"forme": {"type": "string", "enum": SHAPES}, "texte_fleche": {"type": "string", "description": "Étiquette de la flèche (optionnel)"}}, ["texte"]),
 		_fn("ajouter_texte", "Ajoute un texte libre.", {"texte": {"type": "string"}}, ["texte"]),
 		_fn("relier", "Ajoute une flèche entre deux éléments existants.",
 			{"de": {"type": "string", "description": "id ou texte"}, "vers": {"type": "string", "description": "id ou texte"}, "texte": {"type": "string"}}, ["de", "vers"]),
 		_fn("modifier", "Change le texte et/ou la couleur d'un élément existant.",
 			{"id": {"type": "string", "description": "id ou texte actuel"}, "texte": {"type": "string"},
-			"couleur": {"type": "string", "description": "rouge, vert, bleu, jaune, violet, orange, rose, gris, blanc ou #hex"}}, ["id"]),
+			"couleur": {"type": "string", "description": "Couleur du trait : rouge, vert, bleu, jaune, violet, orange, rose, gris, blanc ou #hex"},
+			"fond": {"type": "string", "description": "Couleur de remplissage (mêmes valeurs ; « aucun » pour l'enlever)"}}, ["id"]),
 		_fn("supprimer", "Supprime des éléments (jamais les zones de chat).",
 			{"ids": {"type": "array", "items": {"type": "string"}, "description": "ids ou textes"}}, ["ids"]),
 	]
@@ -53,9 +57,11 @@ static func run(sc, name: String, args: Dictionary, center: Vector2, created: Ar
 			return _diagram(sc, args, center, created)
 		"lister_elements":
 			return _list(sc)
-		"ajouter_forme":
-			var t := str(args.get("type", "rectangle"))
-			return _add_shape(sc, t if t in SHAPES else "rectangle", str(args.get("texte", "")), center, created)
+		"lire_zones":
+			return _zones(sc)
+		"ajouter_etape", "ajouter_forme":
+			var t := str(args.get("forme", args.get("type", "rectangle")))
+			return _add_step(sc, t if t in SHAPES else "rectangle", str(args.get("texte", "")), str(args.get("apres", "")), str(args.get("texte_fleche", "")), center, created)
 		"ajouter_texte":
 			return _add_text(sc, str(args.get("texte", "")), center, created)
 		"relier":
@@ -110,10 +116,13 @@ static func resolve(sc, key: String) -> Dictionary:
 	if not el.is_empty():
 		return el
 	var k := key.to_lower().replace("\n", " ")
+	var arrow_hit := {}
 	for e in sc.els:
 		if label_of(e).to_lower().replace("\n", " ") == k and k != "":
-			return e
-	return {}
+			if e.type != "arrow":
+				return e
+			arrow_hit = e
+	return arrow_hit
 
 
 ## Zone libre à droite du contenu existant (ou autour du centre de la vue si le tableau est vide).
@@ -282,12 +291,69 @@ static func _list(sc) -> String:
 	return "\n".join(out) if not out.is_empty() else "(tableau vide)"
 
 
-static func _add_shape(sc, shape: String, text: String, center: Vector2, created: Array) -> String:
+static func _free(sc, p: Vector2, size: Vector2) -> bool:
+	var r := Rect2(p, size).grow(14.0)
+	for e in sc.els:
+		if e.type == "arrow" or e.type == "freedraw":
+			continue
+		if r.intersects(Geom.aabb(e)):
+			return false
+	return true
+
+
+static func _add_step(sc, shape: String, text: String, after: String, arrow_text: String, center: Vector2, created: Array) -> String:
 	text = wrap_text(text)
+	if text.strip_edges() == "":
+		return "Erreur : texte vide."
 	var s := _node_size(text)
-	var el := _make_shape(sc, shape, text, origin(sc, center, s), s)
+	var anchor := resolve(sc, after) if after.strip_edges() != "" else {}
+	if after.strip_edges() != "" and (anchor.is_empty() or anchor.type == "arrow"):
+		return "Erreur : « %s » introuvable (utilise lister_elements)." % after
+	var p := origin(sc, center, s)
+	if not anchor.is_empty():
+		var b: Rect2 = Geom.aabb(anchor)
+		p = Vector2(b.get_center().x - s.x * 0.5, b.end.y + GAP_Y)
+		var tries := 0
+		while not _free(sc, p, s) and tries < 10:  # case prise : décale vers la droite, puis plus bas
+			p.x += s.x + GAP_X
+			tries += 1
+			if tries == 6:
+				p = Vector2(b.get_center().x - s.x * 0.5, b.end.y + GAP_Y + s.y + GAP_Y)
+	var el := _make_shape(sc, shape, text, p, s)
 	created.append(el.id)
+	if not anchor.is_empty():
+		var ar := _make_arrow(sc, anchor, el, arrow_text)
+		created.append(ar.id)
+		return "Étape ajoutée (id %s) et reliée." % el.id
 	return "Forme ajoutée (id %s)." % el.id
+
+
+static func _zones(sc) -> String:
+	var out: PackedStringArray = []
+	var zs: Array = sc.zones()
+	if zs.is_empty():
+		return "(aucune zone de chat dans le plan : schématise alors directement, avec creer_diagramme, les étapes générales d'une démarche de réflexion — problème, pistes, critique, décision, plan d'action)"
+	for z in zs:
+		var line := "[%s] « %s » — %s, %s" % [z.id, str(z.get("title", "")), str(z.get("kind", "")), "clôturée" if z.get("closed", false) else "ouverte"]
+		var body := str(z.get("summary", "")).strip_edges()
+		if body == "":
+			for i in range((z.msgs as Array).size() - 1, -1, -1):
+				if z.msgs[i].role == "assistant" and str(z.msgs[i].content).strip_edges() != "":
+					body = str(z.msgs[i].content).strip_edges()
+					break
+		if body != "":
+			line += "\n   " + body.replace("\n", " ").left(260)
+		out.append(line)
+		if "\n".join(out).length() > 3200:
+			out.append("… (tronqué)")
+			break
+	for a in sc.arrows():
+		if str(a.get("link", "")) != "":
+			var za: Dictionary = sc.get_el(str(a.get("start", "")))
+			var zb: Dictionary = sc.get_el(str(a.get("end", "")))
+			if not za.is_empty() and not zb.is_empty():
+				out.append("fil : « %s » -> « %s » (%s)" % [str(za.get("title", "")), str(zb.get("title", "")), {"feed": "nourrit", "critique": "critique", "compare": "compare", "merge": "fusionne"}.get(str(a.link), "nourrit")])
+	return "\n".join(out)
 
 
 static func _add_text(sc, text: String, center: Vector2, created: Array) -> String:
@@ -343,6 +409,18 @@ static func _modify(sc, args: Dictionary) -> String:
 		if el.type != "zone":
 			el.stroke = c
 			done.append("couleur")
+	if args.has("fond") and el.type != "zone":
+		var fcol := str(args.fond).strip_edges().to_lower()
+		if fcol in ["aucun", "transparent", "none", ""]:
+			el.bg = "transparent"
+			el.fillStyle = "aucun"
+		else:
+			var f2 := color_of(fcol)
+			if f2 == "":
+				return "Erreur : couleur de fond inconnue."
+			el.bg = f2
+			el.fillStyle = "plein"
+		done.append("fond")
 	sc.mark(el)
 	sc.refresh_arrows({el.id: true})
 	return "Modifié (%s)." % ", ".join(done) if not done.is_empty() else "Rien à modifier."
@@ -352,6 +430,8 @@ static func _delete(sc, ids) -> String:
 	var list: Array = ids if ids is Array else [ids]
 	var del: Array = []
 	var refused := 0
+	if list.size() == 1 and str(list[0]).strip_edges().to_lower() in ["tout", "tous", "tout le schéma", "tout le tableau", "*", "all", "everything"]:
+		list = sc.els.filter(func(e): return e.type != "zone").map(func(e): return str(e.id))
 	for k in list:
 		var el := resolve(sc, str(k))
 		if el.is_empty():
@@ -360,6 +440,10 @@ static func _delete(sc, ids) -> String:
 			refused += 1
 		elif el.id not in del:
 			del.append(el.id)
+	if refused > 0:
+		# tout ou rien : un modèle qui mêle une zone à sa liste a mal compris, on ne supprime RIEN
+		return "Refusé : les zones de chat ne se suppriment pas par l'assistant (rien n'a été supprimé). Ne supprime que les formes, textes et flèches demandés."
 	if not del.is_empty():
 		sc.remove(del)
-	return "%d élément(s) supprimé(s)%s." % [del.size(), " ; les zones de chat sont protégées" if refused > 0 else ""]
+	var left: int = sc.els.filter(func(e): return e.type != "zone").size()
+	return "%d élément(s) supprimé(s). Il reste %d élément(s) hors zones." % [del.size(), left]

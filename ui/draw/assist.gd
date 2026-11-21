@@ -19,6 +19,8 @@ var input: LineEdit
 var send_b: Button
 var busy := false
 var req: Ollama.Req
+var trace: Array = []  # [{name, args, res}] des outils appelés (tests / diagnostic)
+var last_error := ""
 var history: Array = []  # [{role, content}] (texte seulement)
 
 
@@ -128,20 +130,28 @@ func ask(text: String) -> void:
 	var user_msg := text + ("\n(Éléments sélectionnés : %s)" % ", ".join(sel) if not sel.is_empty() else "")
 	var sys := U.system_prompt(0, false) + "\nTu es l'assistant du tableau de graphes (type Excalidraw). Tu crées et modifies des schémas avec tes outils : "
 	sys += "pour tout schéma ou organigramme, utilise creer_diagramme avec seulement le texte des nœuds et les liens (la mise en page est automatique, ne parle jamais de coordonnées). "
-	sys += "Appelle lister_elements avant de modifier ou supprimer. Textes de nœuds courts. Après avoir agi, réponds en une ou deux phrases."
+	sys += "Pour AJOUTER à un schéma existant, n'utilise JAMAIS creer_diagramme (il crée un schéma neuf et duplique tout) : utilise ajouter_etape, ajouter_texte ou relier. "
+	sys += "Pour schématiser la réflexion, les étapes de raisonnement ou le contenu du plan, appelle d'abord lire_zones puis creer_diagramme (un nœud par zone ou par idée clé, 10 nœuds maximum, 5 mots maximum par nœud). "
+	sys += "Ne dis JAMAIS que tu as fait quelque chose sans l'avoir fait avec un outil. "
+	sys += "Appelle lister_elements avant de modifier, relier ou supprimer afin de connaître les ids. Ne supprime QUE ce qui est explicitement demandé, jamais autre chose en remplacement : si la demande vise une zone de chat (impossible pour toi), explique-le sans rien supprimer. Pour « effacer tout », utilise supprimer avec ids [\"tout\"] puis vérifie qu'il ne reste rien. Textes de nœuds courts. Après avoir agi, réponds en une ou deux phrases."
 	var msgs: Array = [{"role": "system", "content": sys}]
 	msgs.append_array(history.slice(maxi(0, history.size() - MAX_HISTORY)))
 	msgs.append({"role": "user", "content": user_msg})
 	var shown := "[color=#98a2b0]Toi : %s[/color]\n" % MD.esc(text)
 	_say(shown + "[color=#98a2b0]…[/color]")
+	trace.clear()
+	last_error = ""
 	var created: Array = []
 	var center: Vector2 = board.canvas.c2w(board.canvas.size * 0.5)
 	var final := ""
+	var nudged := false
 	for round_i in MAX_ROUNDS + 1:
-		req = board.ctx.ollama.chat(model, msgs, {"temperature": 0.3, "num_predict": 1200}, GraphTools.schema() if round_i < MAX_ROUNDS else [])
-		var acc := [""]
+		req = board.ctx.ollama.chat(model, msgs, {"temperature": 0.3, "num_predict": 3000}, GraphTools.schema() if round_i < MAX_ROUNDS else [])
+		var acc := ["", ""]  # texte, done_reason
 		var calls: Array = []
 		req.line.connect(func(l: Dictionary):
+			if l.get("done", false):
+				acc[1] = str(l.get("done_reason", ""))
 			var m: Dictionary = l.get("message", {})
 			var c := str(m.get("content", ""))
 			if c != "":
@@ -160,6 +170,24 @@ func ask(text: String) -> void:
 				shown += "[color=#98a2b0](arrêté)[/color]\n"
 			break
 		if calls.is_empty():
+			# JSON de l'outil écrit dans le texte (ou coupé net par la limite de longueur) : on récupère les nœuds/liens complets
+			var salv := _salvage(txt)
+			if not salv.is_empty():
+				calls = [{"function": {"name": "creer_diagramme", "arguments": salv}}]
+				txt = ""
+				shown += "[color=#fbbf24](réponse du modèle %s : schéma récupéré)[/color]\n" % ("coupée" if acc[1] == "length" else "mal formée")
+			elif acc[1] == "length" and not nudged:
+				nudged = true
+				msgs.append({"role": "assistant", "content": txt})
+				msgs.append({"role": "user", "content": "Ta réponse a été coupée (trop longue). Recommence avec un schéma plus petit : 8 nœuds maximum, 4 mots par nœud."})
+				shown += "[color=#fbbf24](réponse coupée : nouvel essai plus court)[/color]\n"
+				continue
+			elif trace.is_empty() and not nudged and _claims_done(txt):
+				nudged = true
+				msgs.append({"role": "assistant", "content": txt})
+				msgs.append({"role": "user", "content": "Tu n'as appelé aucun outil : rien n'a été modifié sur le tableau. Appelle maintenant l'outil adapté (lister_elements si tu ne connais pas les ids)."})
+				continue
+		if calls.is_empty():
 			final = txt
 			shown += MD.to_bbcode(txt, T.OK.to_html(false))
 			break
@@ -175,6 +203,7 @@ func ask(text: String) -> void:
 			if not (args is Dictionary):
 				args = {}
 			var res := GraphTools.run(sc, nm, args, center, created)
+			trace.append({"name": nm, "args": args, "res": res})
 			shown += "[color=#98a2b0]🔧 %s → %s[/color]\n" % [nm, MD.esc(res.left(80))]
 			msgs.append({"role": "tool", "content": res, "tool_name": nm})
 		_say(shown)
@@ -194,3 +223,30 @@ func ask(text: String) -> void:
 	req = null
 	input.editable = true
 	input.grab_focus()
+
+
+## « Voilà, c'est supprimé » sans appel d'outil : le modèle prétend avoir agi.
+func _claims_done(t: String) -> bool:
+	return RegEx.create_from_string("(?i)(supprim|cré|ajout|modifi|effac|reli|colori|renomm|déplac)(é|ée|és|ées)\\b|c'est fait|voilà").search(t) != null
+
+
+## Récupère nœuds et liens complets dans un JSON d'outil écrit en texte (même coupé avant la fin).
+func _salvage(txt: String) -> Dictionary:
+	if '"noeuds"' not in txt and not ('"texte"' in txt and '"de"' in txt):
+		return {}
+	var nodes: Array = []
+	var links: Array = []
+	for m in RegEx.create_from_string("\\{[^{}]*\\}").search_all(txt):
+		var o = JSON.parse_string(m.get_string())
+		if o is Dictionary:
+			if o.has("de") and o.has("vers"):
+				links.append(o)
+			elif o.has("texte"):
+				nodes.append(o)
+	if nodes.is_empty():
+		return {}
+	var disp := "arbre"
+	var dm := RegEx.create_from_string("\"disposition\"\\s*:\\s*\"(arbre|ligne|grille)\"").search(txt)
+	if dm != null:
+		disp = dm.get_string(1)
+	return {"noeuds": nodes, "liens": links, "disposition": disp}
