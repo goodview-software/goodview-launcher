@@ -74,7 +74,7 @@ static func visible_text(text: String) -> String:
 		return text.substr(0, i).strip_edges(false, true)
 	for k in [4, 3, 2, 1]:
 		if text.length() >= k and "<<ask".begins_with(text.substr(text.length() - k)):
-			return text.substr(0, text.length() - k)
+			return text.substr(0, text.length() - k).strip_edges(false, true)
 	return text
 
 

@@ -13,7 +13,7 @@ static func label(text: String, size: int, color: Color, parent: Control = null)
 	l.text = text
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
-	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.autowrap_mode = TextServer.AUTOWRAP_OFF if parent is HBoxContainer else TextServer.AUTOWRAP_WORD_SMART
 	if parent != null:
 		parent.add_child(l)
 	return l
@@ -35,9 +35,9 @@ static func pill(parent: Control, text: String, color: Color) -> Label:
 
 
 ## Carte (fond #171b22, sans bordure) ; renvoie le conteneur vertical intérieur.
-static func card(parent: Control, pad := 18) -> VBoxContainer:
+static func card(parent: Control, pad := 16) -> VBoxContainer:
 	var p := PanelContainer.new()
-	p.add_theme_stylebox_override("panel", T.style(T.CARD, 22, pad))
+	p.add_theme_stylebox_override("panel", T.style(T.CARD, 24, pad))
 	parent.add_child(p)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 12)

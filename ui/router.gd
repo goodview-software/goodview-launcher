@@ -119,6 +119,8 @@ func go_tab(id: String, args := {}) -> Control:
 			p.visible = false
 	stack = [n]
 	_swap(n, old, 1, old != null and not is_tab(old))
+	if tgt != null:
+		n.on_show()
 	return n
 
 

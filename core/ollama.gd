@@ -52,9 +52,9 @@ class Req extends RefCounted:
 			var s := str(l).strip_edges()
 			if s == "":
 				continue
-			var d = JSON.parse_string(s)
-			if d is Dictionary:
-				line.emit(d)
+			var j := JSON.new()
+			if j.parse(s) == OK and j.data is Dictionary:
+				line.emit(j.data)
 
 	func step(dt: float) -> void:
 		if is_done:
@@ -159,9 +159,9 @@ static func parse_ndjson(text: String) -> Array:
 	for l in text.split("\n"):
 		if l.strip_edges() == "":
 			continue
-		var d = JSON.parse_string(l)
-		if d is Dictionary:
-			out.append(d)
+		var j := JSON.new()
+		if j.parse(l) == OK and j.data is Dictionary:
+			out.append(j.data)
 	return out
 
 

@@ -13,6 +13,7 @@ var preview: W.Avatar
 var pickers: Array = []
 var edit: LineEdit
 var avatar := 0
+var _picked := false  # le choix de mascotte vient de cet éditeur (sinon on ne l'écrase pas)
 var name_lbl: Label
 var motto_lbl: Label
 var role_lbl: Label
@@ -61,6 +62,7 @@ func _ready() -> void:
 
 func _pick(i: int) -> void:
 	avatar = i
+	_picked = true
 	_refresh()
 	commit()
 
@@ -79,7 +81,7 @@ func _refresh() -> void:
 func commit() -> void:
 	if ctx == null:
 		return
-	ctx.set_profile(edit.text, avatar)
+	ctx.set_profile(edit.text, avatar if _picked else ctx.store.avatar)
 	if edit.text.strip_edges() == "":
 		edit.text = ctx.store.pseudo
 	changed.emit()

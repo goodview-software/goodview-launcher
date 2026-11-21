@@ -31,7 +31,7 @@ static func blocks(src: String) -> Array:
 
 
 static func esc(s: String) -> String:
-	return s.replace("[", "[lb]").replace("]", "[rb]")
+	return s.replace("[", "\u0001").replace("]", "\u0002").replace("\u0001", "[lb]").replace("\u0002", "[rb]")
 
 
 static func _inline(s: String, accent: String) -> String:

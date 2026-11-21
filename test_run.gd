@@ -6,10 +6,22 @@ const Ctx := preload("res://core/ctx.gd")
 const Router := preload("res://ui/router.gd")
 const Store := preload("res://core/store.gd")
 const Catalog := preload("res://core/catalog.gd")
+const T := preload("res://ui/theme.gd")
+const U := preload("res://ui/universe.gd")
+const Ollama := preload("res://core/ollama.gd")
+const Orchestra := preload("res://core/orchestra.gd")
+const Chats := preload("res://core/chats.gd")
+const MD := preload("res://ui/markdown.gd")
+const Attach := preload("res://core/attach.gd")
+const W := preload("res://ui/widgets.gd")
 
 var fails: PackedStringArray = []
 var ctx: Ctx
 var router: Router
+var server := TCPServer.new()  # faux Ollama local (aucun réseau externe)
+var conns: Array = []
+var handler: Callable = func(_path: String, _body: Dictionary) -> Dictionary: return {"code": 200, "lines": []}
+var requests: Array = []
 
 
 func check(cond: bool, msg: String) -> void:
@@ -49,6 +61,8 @@ func run(host: Node) -> void:
 	router.ctx = ctx
 	router.instant = true
 	ctx.router = router
+	server.listen(0, "127.0.0.1")
+	ctx.ollama.base_url = "http://127.0.0.1:%d" % server.get_local_port()
 	host.add_child(router)
 	await frames()
 	check(ctx.store.real == false, "store en bac à sable")
@@ -91,7 +105,7 @@ func run(host: Node) -> void:
 	check(home._search.visible, "recherche visible au-delà de 6 apps")
 	check(ctx.updates().size() == 2, "2 mises à jour détectées")
 	check(ctx.has_updates(), "badge de mise à jour")
-	check(home._avatar.badge, "badge sur l'avatar")
+	check(router.nav.badge, "badge de mise à jour sur l'onglet Apps")
 	for mode in ["recent", "az", "updates"]:
 		home.sort_mode = mode
 		home._render_list()
@@ -154,10 +168,11 @@ func run(host: Node) -> void:
 	var pr: Control = router.push("profile")
 	await frames()
 	pr.body.get_child(0).avatar = 2
+	pr.body.get_child(0)._picked = true
 	pr.body.get_child(0).edit.text = "Testeur"
 	pr.body.get_child(0).commit()
 	check(ctx.store.pseudo == "Testeur" and ctx.store.avatar == 2, "profil enregistré")
-	router.back()
+	router.go_tab("home")
 	await frames()
 	var se: Control = router.push("settings")
 	await frames()
@@ -199,7 +214,7 @@ func run(host: Node) -> void:
 	check(w.step == 1, "bienvenue écran 2")
 	w.finish()
 	await frames()
-	check(ctx.store.welcomed and router.current().get_script() == Router.PAGES["home"], "fin de bienvenue -> accueil")
+	check(ctx.store.welcomed and router.current().get_script() == Router.PAGES["chat"], "fin de bienvenue -> chat (page par défaut)")
 
 	# --- transitions animées (sans instant) : pas d'erreur
 	router.instant = false
@@ -209,9 +224,522 @@ func run(host: Node) -> void:
 	await get_tree().create_timer(0.4).timeout
 	check(router.stack.size() == 1, "transitions")
 
+	await run_ui()
+	await run_assistants()
+	if OS.get_environment("GL_TEST_OLLAMA") == "1":
+		await run_live()
+
 	if fails.is_empty():
 		print("OK")
 		get_tree().quit(0)
 	else:
 		print("ECHECS : ", ", ".join(fails))
 		get_tree().quit(1)
+
+
+# ------------------------------------------------------------------ Faux serveur Ollama (127.0.0.1, port éphémère)
+
+func _process(_dt: float) -> void:
+	if server.is_listening() and server.is_connection_available():
+		conns.append({"p": server.take_connection(), "buf": PackedByteArray(), "done": false, "close": 0})
+	for c in conns.duplicate():
+		var p: StreamPeerTCP = c.p
+		p.poll()
+		if c.close > 0:
+			c.close -= 1
+			if c.close == 0:
+				p.disconnect_from_host()
+				conns.erase(c)
+			continue
+		if p.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+			conns.erase(c)
+			continue
+		var n := p.get_available_bytes()
+		if n > 0:
+			c.buf.append_array(p.get_data(n)[1])
+		if c.done:
+			continue
+		var s: String = c.buf.get_string_from_utf8()
+		var he := s.find("\r\n\r\n")
+		if he < 0:
+			continue
+		var head := s.substr(0, he)
+		var cl := 0
+		for l in head.split("\r\n"):
+			if l.to_lower().begins_with("content-length:"):
+				cl = l.get_slice(":", 1).strip_edges().to_int()
+		var raw: PackedByteArray = c.buf.slice(he + 4)
+		if raw.size() < cl:
+			continue
+		c.done = true
+		var path := head.split(" ")[1]
+		var body = JSON.parse_string(raw.get_string_from_utf8()) if cl > 0 else {}
+		requests.append({"path": path, "body": body})
+		var res: Dictionary = handler.call(path, body if body is Dictionary else {})
+		var payload := ""
+		for ln in res.lines:
+			var b: String = ln if ln is String else JSON.stringify(ln)
+			payload += "%x\r\n%s\n\r\n" % [b.to_utf8_buffer().size() + 1, b]
+		payload += "0\r\n\r\n"
+		var code: int = res.code
+		var out := "HTTP/1.1 %d X\r\nContent-Type: application/x-ndjson\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n%s" % [code, payload]
+		p.put_data(out.to_utf8_buffer())
+		c.close = 3
+
+
+func msg_line(text: String, done := false) -> Dictionary:
+	return {"model": "x", "message": {"role": "assistant", "content": text}, "done": done}
+
+
+func tags_lines() -> Array:
+	var ms: Array = []
+	for n in [["llama3.2:3b", 2e9], ["gemma3:4b", 3.3e9], ["qwen2.5-coder:7b", 4.7e9], ["llama3.1:8b", 4.9e9], ["llama3.2-vision:latest", 7.8e9], ["qwen3:8b", 5.2e9]]:
+		ms.append({"name": n[0], "size": n[1]})
+	return [{"models": ms}]
+
+
+## Réponse type du faux serveur : tags, et chat « Bonjour **monde** » en 3 jetons.
+func default_handler(path: String, body: Dictionary) -> Dictionary:
+	if path == "/api/tags":
+		return {"code": 200, "lines": tags_lines()}
+	if path == "/api/pull":
+		return {"code": 200, "lines": [{"status": "pulling x", "total": 100, "completed": 50}, {"status": "pulling x", "total": 100, "completed": 100}, {"status": "success"}]}
+	if path == "/api/chat":
+		if body.get("model", "") == "absent":
+			return {"code": 404, "lines": [{"error": "model 'absent' not found"}]}
+		if body.get("stream", true) == false:
+			return {"code": 200, "lines": [msg_line("Un beau titre", true)]}
+		return {"code": 200, "lines": [msg_line("Bonjour "), msg_line("**monde** `x`"), msg_line("", true)]}
+	return {"code": 404, "lines": []}
+
+
+func wait_for(cond: Callable, max_frames := 400) -> bool:
+	var g := 0
+	while not cond.call() and g < max_frames:
+		await frames(1)
+		g += 1
+	return cond.call()
+
+
+# ------------------------------------------------------------------ UI : thème dynamique, nav, accueil, fiche, libellés
+
+func label_check(page: Control, tag: String) -> void:
+	var bad: PackedStringArray = []
+	var stack: Array = [page]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		for c in n.get_children():
+			stack.append(c)
+		if n is Label and (n as Label).is_visible_in_tree() and (n as Label).text.length() >= 3:
+			var l: Label = n
+			var fs := l.get_theme_font_size("font_size")
+			if l.size.x < fs * 2.0 and l.size.x > 0.0 or (l.autowrap_mode != TextServer.AUTOWRAP_OFF and l.size.x < fs * 2.0 and l.size.x > 0.0):
+				bad.append("«%s» %.0fpx" % [l.text.left(20), l.size.x])
+	check(bad.is_empty(), "libellés coupés (%s) : %s" % [tag, ", ".join(bad)])
+
+
+func run_ui() -> void:
+	# --- 8 univers : charte, thème global, signal et reconstruction des pages
+	check(U.count() == 8, "8 assistants")
+	var seen := {}
+	for i in U.count():
+		var u := U.get_u(i)
+		seen[u.name] = true
+		for k in ["id", "name", "role", "specialty", "accent", "bg", "card", "card_hi", "field", "motto", "model", "temp", "anim", "personality", "prompt"]:
+			check(u.has(k), "assistant %d : champ %s" % [i, k])
+		check(float(u.anim.speed) > 0.0 and float(u.anim.bounce) > 0.0, "assistant %d : personnalité d'animation" % i)
+	check(seen.size() == 8, "noms uniques")
+	check(U.get_u(0).role == "general" and U.get_u(1).role == "expert", "Goody généraliste, les autres experts")
+	var changes := [0]
+	ctx.theme_changed.connect(func(): changes[0] += 1)
+	var home: Control = router.go_tab("home")
+	await frames()
+	for i in [3, 6, 1, 0, 7]:
+		ctx.set_active(i)
+		await frames(2)
+		check(T.OK == Color(str(U.get_u(i).accent)) and T.BG == Color(str(U.get_u(i).bg)), "thème de l'univers %d appliqué" % i)
+		check(router.bg.color == T.BG, "fond du routeur recoloré (%d)" % i)
+	check(changes[0] == 5, "signal theme_changed émis à chaque changement")
+	ctx.set_profile("Testeur", 4)
+	await frames(2)
+	check(T.OK == U.color(4) and ctx.active == 4, "profil : changer de mascotte recolore tout")
+	var sh := U.shared_theme(4)
+	check(sh.name == "Mauve" and sh.accent == "#b58bff" and sh.has("bg") and sh.has("card"), "bloc theme du profil partagé")
+	check(U.pick_model(2, [{"name": "qwen2.5-coder:7b", "size": 1}, {"name": "gemma3:4b", "size": 1}]) == "qwen2.5-coder:7b", "modèle préféré")
+	check(U.pick_model(2, ["gemma3:4b"]) == "gemma3:4b" and U.pick_model(7, ["llama3.2-vision:latest", "qwen3:8b"]) == "llama3.2-vision:latest", "repli de modèle")
+	check(U.pick_model(0, []) == "", "aucun modèle")
+	ctx.set_active(0)
+	await frames(2)
+
+	# --- barre de navigation : 3 onglets, chat par défaut
+	check(ctx.start_page() == "chat", "le chat est la page de démarrage par défaut")
+	handler = default_handler
+	for id in ["chat", "profile", "home", "chat"]:
+		var pg: Control = router.go_tab(id)
+		await frames(2)
+		check(router.current() == pg and router.nav.visible and router.nav.current == id, "onglet " + id)
+		label_check(pg, "onglet " + id)
+	router.go_tab("home")
+	router.push("settings")
+	await frames()
+	check(not router.nav.visible, "barre masquée sur une page secondaire")
+	router.back()
+	await frames()
+	check(router.nav.visible, "barre revenue")
+	ctx.store.set_s("ui", "start", "home")
+	check(ctx.start_page() == "home", "réglage de page de démarrage")
+	ctx.store.set_s("ui", "start", "chat")
+
+	# --- Apps : grille avec 0, 1, 4 et 7 apps, 1 et 2 colonnes
+	for n in [0, 1, 4, 7]:
+		for wide in [false, true]:
+			ctx.catalog.set_fake(fake_list(n))
+			home.set_wide(wide)
+			await frames(3)
+			check(home._list.get_child_count() > 0, "apps : %d apps, wide=%s" % [n, wide])
+			if n > 0:
+				var g: GridContainer = home._list.get_child(0)
+				check(g.columns == 2 and g.get_child_count() == n, "grille 2 colonnes (%d)" % n)
+			check((home.body.get_child(0) is HBoxContainer) == wide, "mise en page %s" % ("large" if wide else "étroite"))
+			label_check(home, "apps %d/%s" % [n, wide])
+	ctx.catalog.set_fake([], "loading")
+	await frames(2)
+	check(home._list.get_child(0) is GridContainer, "chargement : cartes fantômes en grille")
+	ctx.catalog.set_fake(fake_list(7))
+	home.force_wide = -1
+	await frames(2)
+
+	# --- fiche d'app : versions, APK, installée ou non, textes très longs, 360 px et 1100 px
+	var long_name := "application-au-nom-vraiment-extremement-long-pour-tester-le-retour-a-la-ligne"
+	var la := fake(long_name, "v1.0.0-beta.12345", "2026-03-01T00:00:00Z", true, true)
+	la.manifest = {"tagline": "Une accroche interminable " + "mot ".repeat(40), "description": "Description " + "longue ".repeat(60)}
+	la.repo = {"description": "Une accroche interminable " + "mot ".repeat(40), "license": "GPL-3.0-or-later", "stars": 12, "pushed_at": "2026-03-02T00:00:00Z"}
+	var apps2 := fake_list(5)
+	apps2.append(la)
+	ctx.catalog.set_fake(apps2)
+	ctx.store.installed["app-4"] = {"tag": "v1.4", "exe": "/tmp/none", "desk": true}
+	for scenario in [["app-2", 0], ["app-1", 1], ["app-4", 5], [long_name, 5]]:
+		for w in [360, 1100]:
+			get_window().size = Vector2i(w, 760)
+			await frames(3)
+			var ap: Control = router.push("app", {"name": scenario[0]})
+			await frames(2)
+			ap._hist[scenario[0]] = _versions(scenario[1])
+			ap.force_wide = 1 if w >= 900 else 0
+			ap.rebuild()
+			await frames(3)
+			check(ap.body.get_child_count() > 0, "fiche %s v=%d w=%d" % [str(scenario[0]).left(12), scenario[1], w])
+			check((ap.body.get_child(0) is HBoxContainer) == (w >= 900), "fiche : colonnes selon la largeur (%d)" % w)
+			label_check(ap, "fiche %s %d" % [str(scenario[0]).left(10), w])
+			router.back()
+			await frames(2)
+	get_window().size = Vector2i(1100, 720)
+	await frames(2)
+	for p in ["chat_history", "chat_settings", "about", "settings", "profile"]:
+		var pg2: Control = router.push(p)
+		await frames(3)
+		label_check(pg2, p)
+		if router.stack.size() > 1:
+			router.back()
+		await frames(2)
+	router.go_tab("home")
+	ctx.catalog.set_fake(fake_list(3))
+	await frames(2)
+
+
+func _versions(n: int) -> Array:
+	var l: Array = []
+	for i in n:
+		l.append({"tag": "v1.%d" % (n - i), "date": "2026-0%d-01T00:00:00Z" % (i + 1), "body": "## Nouveautés\n- version %d avec un texte plutôt long pour voir" % i})
+	return l
+
+
+# ------------------------------------------------------------------ Assistants : fonctions pures, streaming, délégation, historique
+
+func run_assistants() -> void:
+	# --- NDJSON (découpe incrémentale et lot)
+	var sp := Ollama.split_lines('{"a":1}\n{"b":2}\n{"c"')
+	check(sp.lines.size() == 2 and sp.rest == '{"c"', "NDJSON : fragment incomplet conservé")
+	check(Ollama.parse_ndjson('{"a":1}\n\nnope\n{"b":2}\n').size() == 2, "NDJSON : lignes invalides ignorées")
+	var pu := Ollama.parse_url("http://127.0.0.1:11434/")
+	check(pu.host == "127.0.0.1" and pu.port == 11434 and not pu.tls, "URL Ollama")
+	check(Ollama.wants_think_off("qwen3:8b") and not Ollama.wants_think_off("llama3.2:3b"), "think désactivé pour qwen3")
+	check(Ollama.strip_think("<think>x</think>Salut") == "Salut" and Ollama.strip_think("a<think>pas fini") == "a", "balises <think> masquées")
+	check(Ollama.supports_tools("llama3.1:8b") and not Ollama.supports_tools("gemma3:4b"), "modèles avec tools")
+	check(U.is_vision("llama3.2-vision:latest") and U.is_vision("gemma3:4b") and not U.is_vision("llama3.2:3b"), "modèles vision")
+
+	# --- Markdown -> BBCode
+	var bb := MD.to_bbcode("# Titre\n**gras** *ital* `code [x]`\n- un\n1. deux\n[lien](https://a.b)", "4de1b4")
+	check("[b]gras[/b]" in bb and "[i]ital[/i]" in bb and "[code]code [lb]x[rb][/code]" in bb, "Markdown : gras, italique, code")
+	check("[font_size=24]" in bb and "•" in bb and "[url=https://a.b]lien[/url]" in bb, "Markdown : titre, liste, lien")
+	var bl := MD.blocks("avant\n```gdscript\nvar a = 1\n```\naprès\n```\nouvert")
+	check(bl.size() == 4 and bl[1].type == "code" and bl[1].lang == "gdscript" and bl[3].get("open", false), "Markdown : blocs de code (dont non fermé)")
+
+	# --- Historique : stockage, groupement, recherche, export
+	var store := Chats.new("user://gltest/chats_unit/")
+	store.export_dir = ProjectSettings.globalize_path("user://gltest/export_unit")
+	var now := Time.get_unix_time_from_system()
+	var mk := func(title: String, age_days: float, ai: int, txt: String, pin := false) -> Dictionary:
+		var c := Chats.new_chat(ai, "m")
+		c.title = title
+		c.pinned = pin
+		c.updated = now - age_days * 86400.0
+		c.id = "t%s_%d" % [title, ai]
+		c.messages = [{"role": "user", "content": txt}, {"role": "assistant", "assistant": ai, "content": "réponse sur " + txt, "calls": [{"id": 1, "from": 0, "to": 2, "question": "q", "answer": "r"}]}]
+		store.save(c)
+		return c
+	mk.call("Aujourd'hui", 0.0, 0, "alpha code godot")
+	mk.call("Hier", 1.0, 2, "beta données")
+	mk.call("Semaine", 4.0, 2, "gamma espagnol")
+	mk.call("Ancien", 40.0, 5, "delta")
+	mk.call("Epingle", 30.0, 3, "epsilon", true)
+	store.load_index()
+	check(store.index.size() == 5, "historique : 5 conversations persistées")
+	var groups := Chats.group(store.index, now)
+	var labels: Array = groups.map(func(g): return g[0])
+	check(labels == ["Épinglées", "Aujourd'hui", "Hier", "Cette semaine", "Plus ancien"], "groupement : " + str(labels))
+	check(Chats.search(store.index, "godot").size() == 1 and Chats.search(store.index, "réponse").size() == 5, "recherche plein texte")
+	check(Chats.search(store.index, "", 2).size() == 2 and Chats.search(store.index, "beta", 2).size() == 1, "filtre par assistant")
+	var c1 := store.load_chat("tHier_2")
+	check(c1.messages.size() == 2 and c1.messages[1].calls.size() == 1, "conversation relue avec ses délégations")
+	var md_path := store.export_md(c1)
+	check(FileAccess.file_exists(md_path) and "demande à" in FileAccess.get_file_as_string(md_path), "export Markdown")
+	var gone := store.delete("tHier_2")
+	check(store.load_chat("tHier_2").is_empty() and store.index.size() == 4, "suppression")
+	store.save(gone)
+	check(not store.load_chat("tHier_2").is_empty(), "annulation de la suppression")
+	var api := Chats.api_messages(c1, 0)
+	check(api.size() == 2 and str(api[1].content).begins_with("(Bleu)"), "contexte : l'autre assistant est nommé")
+
+	# --- Mentions, animations, repli <<ask>>, garde-fous
+	check(U.parse_mention("@Bleu écris du code").index == 2 and U.parse_mention("@bleu").index == 2 and U.parse_mention("salut @Bleu").index == -1, "sélection par @mention")
+	check(U.parse_mention("@Bleu écris du code").text == "écris du code", "texte après la mention")
+	check(U.anim_for("talk") == "talk" and U.anim_for("done") == "happy" and U.anim_for("error") == "sad" and U.anim_for("zzz") == "idle", "mapping des animations")
+	var pa := Orchestra.parse_ask("Je demande. <<ask:Bleu>> Écris une fonction <</ask>> merci")
+	check(pa.asks.size() == 1 and pa.asks[0].name == "Bleu" and "fonction" in pa.asks[0].question and "<<" not in pa.clean, "repli texte <<ask>>")
+	check(Orchestra.visible_text("abc <<ask:Bleu>> q") == "abc" and Orchestra.visible_text("abc <<a") == "abc" and Orchestra.visible_text("a < b") == "a < b", "balises masquées pendant le streaming")
+	check(Orchestra.guard([0], 0, 0, 0) != "" and Orchestra.guard([0, 2], 0, 1, 0) != "" and Orchestra.guard([0], 2, 2, 0) != "" and Orchestra.guard([0], 2, 0, 4) != "" and Orchestra.guard([0], 2, 0, 0) == "" and Orchestra.guard([0], -1, 0, 0) != "", "garde-fous : auto-appel, boucle, profondeur, budget")
+	var ts := Orchestra.tool_schema([0, 2])
+	check(ts[0].function.name == "ask_assistant" and not ("Goody" in ts[0].function.parameters.properties.nom.enum) and "Rosie" in ts[0].function.parameters.properties.nom.enum, "outil ask_assistant sans la chaîne")
+
+	# --- Streaming réel contre le faux serveur
+	handler = default_handler
+	var req := ctx.ollama.chat("llama3.2:3b", [{"role": "user", "content": "salut"}], {"temperature": 0.5}, [], true)
+	var toks: Array = []
+	req.line.connect(func(d): toks.append(str(d.get("message", {}).get("content", ""))))
+	var r: Array = await req.finished
+	check(r[0] and toks.size() == 3 and toks[0] == "Bonjour ", "streaming NDJSON par HTTPClient")
+	check(requests.back().body.options.temperature == 0.5 and requests.back().body.stream == true and not requests.back().body.has("think"), "requête /api/chat")
+	await ctx.ollama.collect(ctx.ollama.chat("qwen3:8b", [], {}, [], true))
+	check(requests.back().body.get("think", true) == false, "qwen3 : think=false envoyé")
+	var rm: Array = await ctx.ollama.collect(ctx.ollama.chat("absent", [], {}))
+	check(not rm[0] and rm[1] == "model_missing", "modèle absent détecté")
+	var tg: Array = await ctx.ollama.collect(ctx.ollama.tags())
+	check(tg[0] and tg[3][0].models.size() == 6, "/api/tags")
+	var old_url := ctx.ollama.base_url
+	ctx.ollama.base_url = "http://127.0.0.1:1"
+	var off: Array = await ctx.ollama.collect(ctx.ollama.tags())
+	check(not off[0] and off[1] == "offline", "Ollama éteint -> offline")
+	ctx.ollama.base_url = old_url
+
+	# --- Orchestre : délégation par tool-calling puis repli texte
+	handler = func(path: String, body: Dictionary) -> Dictionary:
+		if path != "/api/chat":
+			return default_handler.call(path, body)
+		var sysmsg: String = body.messages[0].content
+		var last: Dictionary = body.messages.back()
+		if "Tu es Bleu" in sysmsg:
+			return {"code": 200, "lines": [msg_line("func f(): pass"), msg_line("", true)]}
+		if last.role == "tool":
+			return {"code": 200, "lines": [msg_line("Voici : " + str(last.content)), msg_line("", true)]}
+		return {"code": 200, "lines": [{"message": {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "ask_assistant", "arguments": {"nom": "Bleu", "question": "écris f"}}}]}, "done": true}]}
+	var evs: Array = []
+	var orch: Orchestra = ctx.orchestra
+	orch.allow = true
+	orch.resolve_model = func(_a: int) -> String: return "llama3.1:8b"
+	orch.event.connect(func(k, d): evs.append([k, d]))
+	orch.run(0, [{"role": "user", "content": "code ?"}])
+	await wait_for(func(): return not orch.running)
+	var kinds: Array = evs.map(func(e): return e[0])
+	check("card_open" in kinds and "card_done" in kinds and kinds.back() == "done", "délégation Goody -> Bleu (tools) : " + str(kinds.size()))
+	check(evs.filter(func(e): return e[0] == "done").back()[1].text.contains("func f()"), "Goody synthétise la réponse de Bleu")
+	check(orch.cards.size() == 1 and orch.cards[0].answer.contains("func f()"), "réponse de Bleu conservée dans la carte")
+	check(evs.any(func(e): return e[0] == "speaker" and e[1].ai == 0 and e[1].mode == "call") and evs.any(func(e): return e[0] == "speaker" and e[1].ai == 2 and e[1].mode == "listen"), "mascottes : call / listen")
+	# repli texte (modèle sans tools)
+	evs.clear()
+	handler = func(path: String, body: Dictionary) -> Dictionary:
+		if path != "/api/chat":
+			return default_handler.call(path, body)
+		var sysmsg2: String = body.messages[0].content
+		if "Tu es Bleu" in sysmsg2:
+			return {"code": 200, "lines": [msg_line("print(1)"), msg_line("", true)]}
+		if body.messages.back().content.contains("Réponse de Bleu"):
+			return {"code": 200, "lines": [msg_line("Synthèse finale"), msg_line("", true)]}
+		return {"code": 200, "lines": [msg_line("<<ask:Bleu>> écris un print <</ask>>"), msg_line("", true)]}
+	orch.resolve_model = func(_a: int) -> String: return "gemma3:4b"
+	orch.run(0, [{"role": "user", "content": "code ?"}])
+	await wait_for(func(): return not orch.running)
+	var done_ev: Array = evs.filter(func(e): return e[0] == "done")
+	check(not done_ev.is_empty() and "Synthèse finale" in done_ev[0][1].text and "<<" not in done_ev[0][1].text, "repli texte <<ask>> exécuté")
+	check(not requests.filter(func(q): return q.path == "/api/chat" and q.body.get("tools") != null and q.body.model == "gemma3:4b").size() > 0, "pas de tools envoyés au modèle sans tools")
+	# boucle : Bleu tente d'appeler Goody -> refusé
+	evs.clear()
+	handler = func(path: String, body: Dictionary) -> Dictionary:
+		if path != "/api/chat":
+			return default_handler.call(path, body)
+		var sysmsg3: String = body.messages[0].content
+		if "Tu es Bleu" in sysmsg3:
+			return {"code": 200, "lines": [msg_line("<<ask:Goody>> reviens <</ask>>"), msg_line("", true)]}
+		if "Réponse de" in str(body.messages.back().content):
+			return {"code": 200, "lines": [msg_line("ok fini"), msg_line("", true)]}
+		return {"code": 200, "lines": [msg_line("<<ask:Bleu>> vas-y <</ask>>"), msg_line("", true)]}
+	orch.run(0, [{"role": "user", "content": "x"}])
+	await wait_for(func(): return not orch.running)
+	check(orch.calls_used == 1 and evs.any(func(e): return e[0] == "notice" and "Refusé" in e[1].text), "boucle A->B->A refusée")
+	check(evs.back()[0] == "done", "la boucle se termine proprement")
+	# stop global
+	evs.clear()
+	orch.run(0, [{"role": "user", "content": "x"}])
+	await frames(1)
+	orch.stop()
+	await wait_for(func(): return not orch.running)
+	check(evs.any(func(e): return e[0] == "stopped"), "bouton Stop global")
+	orch.allow = true
+
+	# --- Page Chat : état, envoi en streaming, Markdown, assistants, historique, pièces jointes
+	handler = default_handler
+	ctx.models = []
+	var chp: Control = router.go_tab("chat")
+	await wait_for(func(): return chp.status == "ready" and not ctx.models.is_empty())
+	check(chp.status == "ready" and not ctx.models.is_empty(), "chat : modèles listés (%s, %d, %s)" % [chp.status, ctx.models.size(), ctx.ollama.base_url])
+	chp.new_chat()
+	check(chp.chat.assistant == 0 and chp.current_model() == "llama3.1:8b", "Goody : modèle préféré")
+	check(chp.strip.tiles.size() == 8, "bandeau de 8 assistants")
+	check(chp.send_text("Salut"), "envoi")
+	await wait_for(func(): return not chp.generating)
+	check(chp.chat.messages.size() == 2 and "Bonjour" in chp.chat.messages[1].content, "réponse streamée enregistrée")
+	check(chp.refs.has(1) and chp.refs[1].segs.size() >= 1, "réponse rendue (Markdown)")
+	await frames(4)
+	check(not ctx.chats.load_chat(chp.chat.id).is_empty(), "conversation persistée")
+	await wait_for(func(): return chp.chat.get("titled", false) and chp.chat.title == "Un beau titre")
+	check(chp.chat.title == "Un beau titre", "titre automatique généré par le modèle")
+	chp.switch_assistant(2)
+	await frames(3)
+	check(chp.chat.assistant == 2 and chp.chat.messages.back().role == "note" and "Bleu rejoint" in chp.chat.messages.back().text, "changer d'assistant : ligne « rejoint la conversation »")
+	check(T.OK == U.color(2) and ctx.active == 2, "thème suit l'assistant actif")
+	check(chp.current_model() == "qwen2.5-coder:7b", "Bleu : modèle code")
+	check(chp.send_text("@Rosie corrige ce texte"), "envoi avec @mention")
+	await wait_for(func(): return not chp.generating)
+	check(chp.chat.assistant == 1 and chp.chat.messages[chp.chat.messages.size() - 2].content == "corrige ce texte", "@mention bascule l'assistant")
+	await frames(2)
+	# régénérer / éditer
+	var n_before: int = chp.chat.messages.size()
+	chp.regenerate()
+	await wait_for(func(): return not chp.generating)
+	check(chp.chat.messages.size() == n_before, "régénérer remplace la réponse")
+	chp._edit_last(chp.chat.messages.size() - 2)
+	check(chp.input.text == "corrige ce texte", "éditer le dernier message")
+	# pièces jointes
+	var tf := "user://gltest/pj.csv"
+	FileAccess.open(tf, FileAccess.WRITE).store_string("a,b\n" + "1,2\n".repeat(20000))
+	var at := Attach.read(ProjectSettings.globalize_path(tf))
+	check(at.kind == "text" and at.truncated and at.chars == Attach.MAX_TEXT, "fichier texte tronqué avec avertissement")
+	var img := Image.create(64, 48, false, Image.FORMAT_RGB8)
+	img.fill(Color.RED)
+	img.save_png("user://gltest/pj.png")
+	var ai_ := Attach.read(ProjectSettings.globalize_path("user://gltest/pj.png"))
+	check(ai_.kind == "image" and ai_.b64.length() > 50 and ai_.tex != null, "image en base64 + vignette")
+	check(Attach.read("/nonexistent/x.txt").kind == "bad", "fichier introuvable")
+	chp.switch_assistant(0)
+	await frames(2)
+	chp.attach_files(PackedStringArray([ProjectSettings.globalize_path("user://gltest/pj.png")]))
+	check(chp.attachments.is_empty(), "image refusée si le modèle n'est pas vision")
+	chp.attach_files(PackedStringArray([ProjectSettings.globalize_path(tf)]))
+	check(chp.attachments.size() == 1 and chp.chips.visible, "puce de fichier joint")
+	chp.switch_assistant(7)
+	await frames(2)
+	check(U.is_vision(chp.current_model()), "Brume : modèle vision")
+	chp.attach_files(PackedStringArray([ProjectSettings.globalize_path("user://gltest/pj.png")]))
+	check(chp.attachments.size() == 2, "image acceptée avec un modèle vision")
+	chp.send_text("décris")
+	await wait_for(func(): return not chp.generating)
+	var um: Dictionary = chp.chat.messages[chp.chat.messages.size() - 2]
+	check(um.images.size() == 1 and um.files.size() == 1 and requests.back().body.messages.back().has("images"), "images envoyées en base64, fichier inséré")
+	# erreurs : modèle absent -> message clair
+	chp.chat["model"] = "absent"
+	chp.send_text("test")
+	await wait_for(func(): return not chp.generating)
+	await frames(2)
+	check(chp.msgs.get_child_count() > 0, "erreur modèle absent affichée")
+	chp.chat["model"] = ""
+	# Ollama éteint -> état vide + Réessayer
+	ctx.ollama.base_url = "http://127.0.0.1:1"
+	chp.new_chat()
+	chp.status = "init"
+	chp._refresh_models()
+	await wait_for(func(): return chp.status == "offline")
+	check(chp.status == "offline" and chp.msgs.get_child(1) is W.StateView, "Ollama éteint : état vide avec mascotte triste")
+	ctx.ollama.base_url = old_url
+	chp.status = "init"
+	chp._refresh_models()
+	await wait_for(func(): return chp.status == "ready")
+	# historique et réglages (pages)
+	var hp: Control = router.push("chat_history")
+	await frames(3)
+	check(hp._list.get_child_count() > 0, "page Conversations")
+	hp.query = "Salut"
+	hp._render()
+	hp.set_filter(0)
+	await frames(2)
+	var some: Dictionary = ctx.chats.index[0]
+	hp._pin(some)
+	hp._delete(some.id)
+	await frames(2)
+	check(ctx.chats.load_chat(some.id).is_empty(), "suppression depuis l'historique")
+	router.back()
+	await frames(2)
+	var cs: Control = router.push("chat_settings")
+	await frames(3)
+	cs.start_pull("llama3.2:3b")
+	await wait_for(func(): return ctx.pull.get("done", false))
+	check(ctx.pull.get("ratio", 0.0) == 1.0 and ctx.pull.error == "", "téléchargement de modèle (/api/pull) avec progression")
+	router.back()
+	await frames(2)
+	ctx.store.cfg.set_value("chat", "temp_set", false)
+	router.go_tab("home")
+	await frames(2)
+
+
+# ------------------------------------------------------------------ Test réel Ollama (GL_TEST_OLLAMA=1)
+
+func run_live() -> void:
+	ctx.ollama.base_url = "http://127.0.0.1:11434"
+	var tg: Array = await ctx.ollama.collect(ctx.ollama.tags())
+	var has := false
+	if tg[0] and not tg[3].is_empty():
+		for m in tg[3][0].get("models", []):
+			if str(m.name).begins_with("llama3.2:3b"):
+				has = true
+	if not has:
+		print("Ollama réel : llama3.2:3b absent, test ignoré")
+		return
+	var req := ctx.ollama.chat("llama3.2:3b", [{"role": "user", "content": "Réponds juste par un mot : bonjour ?"}], {"temperature": 0.2, "num_predict": 24}, [], true)
+	var n := [0]
+	req.line.connect(func(d):
+		if str(d.get("message", {}).get("content", "")) != "":
+			n[0] += 1)
+	var r: Array = await req.finished
+	check(r[0] and n[0] >= 2, "Ollama réel : jetons reçus en streaming (%d)" % n[0])
+	# délégation Goody -> Bleu avec un petit modèle
+	var orch: Orchestra = ctx.orchestra
+	orch.allow = true
+	orch.opts = {"num_ctx": 4096, "temperature": 0.2}
+	orch.resolve_model = func(_a: int) -> String: return "llama3.2:3b"
+	var evs: Array = []
+	orch.event.connect(func(k, d): evs.append([k, d]))
+	orch.run(0, [{"role": "user", "content": "Demande à Bleu (utilise l'outil ask_assistant) d'écrire une fonction GDScript qui additionne deux entiers, puis résume sa réponse."}])
+	await wait_for(func(): return not orch.running, 4000)
+	var kinds: Array = evs.map(func(e): return e[0])
+	check("done" in kinds or "error" in kinds, "Ollama réel : l'orchestre termine")
+	check("done" in kinds, "Ollama réel : pas d'erreur (%s)" % str(evs.filter(func(e): return e[0] == "error")))
+	print("Ollama réel : délégations = ", orch.cards.size(), " ; événements = ", kinds.size())

@@ -96,7 +96,7 @@ func build() -> void:
 	msgs = VBoxContainer.new()
 	msgs.add_theme_constant_override("separation", 16)
 	body.add_child(msgs)
-	scroll.get_v_scroll_bar().value_changed.connect(_on_scrolled)
+	link(scroll.get_v_scroll_bar().value_changed, _on_scrolled)
 	_build_composer()
 	_fit_width()
 	link(ctx.orchestra.event, _on_event)
@@ -176,7 +176,8 @@ func rebuild() -> void:
 		_draft = input.text
 	for c in _chrome:
 		if is_instance_valid(c):
-			_outer.remove_child(c)
+			if c.get_parent() != null:
+				c.get_parent().remove_child(c)
 			c.queue_free()
 	_chrome.clear()
 	refs.clear()
@@ -192,7 +193,7 @@ func on_show() -> void:
 			new_chat()
 		else:
 			open_chat(id)
-	elif status != "ready":
+	elif not generating:
 		_refresh_models()
 	if input != null:
 		input.grab_focus.call_deferred()
@@ -856,7 +857,7 @@ func _speed() -> float:
 
 
 func _on_event(kind: String, d: Dictionary) -> void:
-	if not is_instance_valid(strip):
+	if not is_instance_valid(strip) or not generating:
 		return
 	match kind:
 		"speaker":

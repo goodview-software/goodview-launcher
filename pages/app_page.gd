@@ -7,12 +7,37 @@ var app_name := ""
 var _confirm := false
 var _prog: ProgressBar
 var _prog_lbl: Label
-var _star: W.IconBtn
+var _main: VBoxContainer  # colonne principale
+var _side: VBoxContainer  # colonne d'informations (= _main en écran étroit)
+var _col: VBoxContainer  # conteneur courant des sections
+var _wide := false
+var force_wide := -1
 var _connected := false
 const MONTHS := ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
 
 var _hist := {}  # app -> liste des releases (évite de re-interroger GitHub à chaque reconstruction)
 var _shots := {}  # chemin -> texture (évite de retélécharger à chaque reconstruction)
+
+
+func _init() -> void:
+	max_w = 1040.0
+
+
+func is_wide() -> bool:
+	if force_wide >= 0:
+		return force_wide == 1
+	var w := size.x if size.x > 0.0 else get_viewport_rect().size.x
+	return w >= 900.0
+
+
+func _fit_width() -> void:
+	super()
+	if body != null and is_inside_tree() and not a_empty() and is_wide() != _wide:
+		rebuild()
+
+
+func a_empty() -> bool:
+	return ctx.catalog.find(app_name).is_empty()
 
 
 func build() -> void:
@@ -28,7 +53,6 @@ func build() -> void:
 		body.add_child(sv)
 		return
 	set_title(Catalog.title(a))
-	_header_buttons(a)
 	_content(a)
 
 
@@ -50,71 +74,71 @@ func _on_progress(r: float) -> void:
 		_prog_lbl.text = "%d %%" % int(r * 100.0)
 
 
-func _header_buttons(a: Dictionary) -> void:
-	for c in head_right.get_children():
-		head_right.remove_child(c)
-		c.queue_free()
-	var fav := ctx.store.is_fav(app_name)
-	_star = W.IconBtn.new("star_on" if fav else "star", 44)
-	_star.col = T.WARN if fav else T.TEXT
-	_star.tooltip_text = "Retirer des favoris" if fav else "Ajouter aux favoris"
-	_star.pressed.connect(func():
-		ctx.store.toggle_fav(app_name)
-		_header_buttons(a))
-	head_right.add_child(_star)
-	var gh := W.IconBtn.new("github", 44)
-	gh.tooltip_text = "Ouvrir sur GitHub"
-	gh.pressed.connect(func(): OS.shell_open("https://github.com/%s/%s" % [a.org, a.name]))
-	head_right.add_child(gh)
-
-
 func _content(a: Dictionary) -> void:
 	var status := ctx.app_status(a)
 	var tag := Catalog.tag(a)
 	var inst: Dictionary = ctx.store.installed.get(a.name, {})
 	var queued := ctx.installer.is_queued(app_name)
+	_wide = is_wide()
+	var lay: BoxContainer = HBoxContainer.new() if _wide else VBoxContainer.new()
+	lay.add_theme_constant_override("separation", 24 if _wide else 16)
+	body.add_child(lay)
+	_main = VBoxContainer.new()
+	_main.add_theme_constant_override("separation", 16)
+	_main.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lay.add_child(_main)
+	if _wide:
+		_side = VBoxContainer.new()
+		_side.add_theme_constant_override("separation", 16)
+		_side.custom_minimum_size = Vector2(340, 0)
+		_side.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		lay.add_child(_side)
+	else:
+		_side = _main
+	_col = _main
 
-	var ic := app_icon(a, 170, true)
+	# --- En-tête : icône nette, nom, accroche, pastilles
+	var hd := HBoxContainer.new()
+	hd.add_theme_constant_override("separation", 16 if _wide else 12)
+	_main.add_child(hd)
+	var px := 112 if _wide else 88
+	var ic := app_icon(a, px, false)
+	ic.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	ic.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	if status == "ok":
 		ic.badge = T.OK
-	body.add_child(ic)
-	var t := W.label(Catalog.title(a), 28, T.TEXT, body)
-	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	var tg := W.label(Catalog.tagline(a), 15, T.DIM, body)
-	tg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	var chips := HBoxContainer.new()
-	chips.alignment = BoxContainer.ALIGNMENT_CENTER
-	chips.add_theme_constant_override("separation", 8)
-	body.add_child(chips)
-	if tag != "":
-		W.pill(chips, tag, T.DIM)
-	if not a.asset.is_empty():
-		W.pill(chips, ctx.fmt_size(float(a.asset.get("size", 0))), T.DIM)
+	hd.add_child(ic)
+	var hv := VBoxContainer.new()
+	hv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hv.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	hv.add_theme_constant_override("separation", 4)
+	hd.add_child(hv)
+	var t := W.label(Catalog.title(a), 28, T.TEXT, hv)
+	t.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	var tg := W.label(Catalog.tagline(a), 15, T.DIM, hv)
+	tg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	var chips := HFlowContainer.new()
+	chips.add_theme_constant_override("h_separation", 8)
+	chips.add_theme_constant_override("v_separation", 8)
+	hv.add_child(chips)
 	var s := status_pill(a)
-	if s[0] != tag:
-		W.pill(chips, s[0], s[1])
+	W.pill(chips, s[0], s[1])
+	if tag != "" and s[0] != tag:
+		W.pill(chips, tag, T.DIM)
 
-	_stats(a)
-
-	# notes de version visibles avant de mettre à jour
-	if status == "update":
-		var nc := W.card(body)
-		W.label("Mise à jour : %s → %s" % [inst.get("tag", "?"), tag], 18, T.WARN, nc)
-		var notes := Catalog.clean_notes(str(a.release.get("body", "")))
-		W.label(notes if notes != "" else "Pas de notes de version.", 15, T.DIM, nc)
-
-	# action principale (ou progression avec annulation)
+	# --- Actions : une seule rangée (bouton principal + favori, GitHub, partager) ; ou progression
 	if queued:
-		var pc := W.card(body)
+		var pc := W.card(_main)
 		var ph := HBoxContainer.new()
 		ph.add_theme_constant_override("separation", 12)
 		pc.add_child(ph)
 		var cur: bool = ctx.installer.current.get("name", "") == app_name
-		var pl := W.label("Téléchargement…" if cur else "En attente…", 16, T.TEXT, ph)
+		var pl := W.label("Téléchargement…" if cur else "En attente…", 15, T.TEXT, ph)
 		pl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		pl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		_prog_lbl = W.label("", 14, T.DIM, ph)
-		var x := W.IconBtn.new("close", 36)
+		_prog_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		var x := W.IconBtn.new("close", 44)
 		x.tooltip_text = "Annuler"
 		x.pressed.connect(ctx.installer.cancel)
 		ph.add_child(x)
@@ -127,33 +151,71 @@ func _content(a: Dictionary) -> void:
 		_prog = null
 		if ctx.installer.errors.has(app_name):
 			var ec := PanelContainer.new()
-			ec.add_theme_stylebox_override("panel", T.style(Color(T.BAD, 0.12), 22, 16))
-			body.add_child(ec)
+			ec.add_theme_stylebox_override("panel", T.style(Color(T.BAD, 0.12), 24, 16))
+			_main.add_child(ec)
 			var er := HBoxContainer.new()
 			er.add_theme_constant_override("separation", 12)
 			ec.add_child(er)
-			var ei := Control.new()
-			ei.custom_minimum_size = Vector2(30, 30)
-			ei.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-			ei.draw.connect(func(): W.Ico.draw_kind(ei, "alert", ei.size / 2.0, 0.7, T.BAD))
+			var ei := W.IconBtn.new("alert", 44)
+			ei.col = T.BAD
+			ei.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			er.add_child(ei)
 			var el := W.label(str(ctx.installer.errors[app_name]), 15, T.TEXT, er)
+			el.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			el.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			el.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		body.add_child(_main_button(a, status))
+		var ar := HBoxContainer.new()
+		ar.add_theme_constant_override("separation", 8)
+		_main.add_child(ar)
+		var mb := _main_button(a, status)
+		mb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		ar.add_child(mb)
+		var fav := ctx.store.is_fav(app_name)
+		var st := W.IconBtn.new("star_on" if fav else "star", 44)
+		st.col = T.WARN if fav else T.TEXT
+		st.tooltip_text = "Retirer des favoris" if fav else "Ajouter aux favoris"
+		st.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		st.pressed.connect(func():
+			ctx.store.toggle_fav(app_name)
+			rebuild())
+		ar.add_child(st)
+		var gh := W.IconBtn.new("github", 44)
+		gh.tooltip_text = "Ouvrir sur GitHub"
+		gh.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		gh.pressed.connect(func(): OS.shell_open("https://github.com/%s/%s" % [a.org, a.name]))
+		ar.add_child(gh)
+		var sh := W.IconBtn.new("link", 44)
+		sh.tooltip_text = "Copier le lien"
+		sh.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		sh.pressed.connect(func():
+			DisplayServer.clipboard_set("https://github.com/%s/%s" % [a.org, a.name])
+			ctx.notify("Lien copié", "ok"))
+		ar.add_child(sh)
 
+	_stats(a)
+
+	# notes de version visibles avant de mettre à jour
+	if status == "update":
+		var nc := W.card(_main)
+		W.label("Mise à jour : %s → %s" % [inst.get("tag", "?"), tag], 18, T.WARN, nc)
+		var notes := Catalog.clean_notes(str(a.release.get("body", "")))
+		W.label(notes if notes != "" else "Pas de notes de version.", 15, T.DIM, nc)
+
+	_col = _main
 	_screenshots(a)
 	_about(a)
 	_notes(a, status)
-	_info(a, inst)
 	_history(a)
+	_col = _side
+	_info(a, inst)
 	_apk_card(a)
 	_manage_card(a, status, inst)
 
 
 func _manage_card(a: Dictionary, status: String, inst: Dictionary) -> void:
 	# gérer l'app
-	var card := W.card(body)
+	var card := W.card(_col)
+	W.label("Gérer", 18, T.TEXT, card)
 	var r1 := HBoxContainer.new()
 	r1.add_theme_constant_override("separation", 14)
 	card.add_child(r1)
@@ -165,6 +227,7 @@ func _manage_card(a: Dictionary, status: String, inst: Dictionary) -> void:
 			ctx.notify("Vérification impossible : " + ctx.catalog.error_msg, "error"))
 	r1.add_child(i1)
 	var st1 := W.label(_check_text(a, status), 15, T.DIM, r1)
+	st1.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	st1.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	st1.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	if not inst.is_empty():
@@ -174,7 +237,7 @@ func _manage_card(a: Dictionary, status: String, inst: Dictionary) -> void:
 		var i2 := W.IconBtn.new("desktop", 44)
 		i2.col = T.OK if inst.get("desk", false) else T.TEXT
 		r2.add_child(i2)
-		var sl := W.label("Raccourci sur le bureau", 15, T.DIM, r2)
+		var sl := W.label("Raccourci bureau", 15, T.DIM, r2)
 		sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		sl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		var tg2 := W.Toggle.new()
@@ -197,8 +260,9 @@ static func _date(iso: String) -> String:
 
 
 func _section(title: String, right := "") -> VBoxContainer:
-	var c := W.card(body)
+	var c := W.card(_col)
 	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 12)
 	c.add_child(h)
 	var t := W.label(title, 18, T.TEXT, h)
 	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -210,13 +274,15 @@ func _section(title: String, right := "") -> VBoxContainer:
 
 func _kv(parent: Control, key: String, value: String) -> void:
 	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 12)
+	h.add_theme_constant_override("separation", 16)
 	parent.add_child(h)
 	var k := W.label(key, 15, T.DIM, h)
-	k.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	k.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	var v := W.label(value, 15, T.TEXT, h)
+	v.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 
 
 ## Bandeau de chiffres clés : version · taille · date · plateformes.
@@ -236,9 +302,10 @@ func _stats(a: Dictionary) -> void:
 		[" · ".join(plats) if not plats.is_empty() else "—", "Plateformes"],
 	]
 	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", T.style(T.CARD, 22, 14))
-	body.add_child(panel)
+	panel.add_theme_stylebox_override("panel", T.style(T.CARD, 24, 12))
+	_main.add_child(panel)
 	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
 	panel.add_child(row)
 	for i in cells.size():
 		if i > 0:
@@ -248,13 +315,16 @@ func _stats(a: Dictionary) -> void:
 			row.add_child(sep)
 		var v := VBoxContainer.new()
 		v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		v.size_flags_stretch_ratio = 1.0
+		v.custom_minimum_size = Vector2(40, 0)
 		v.add_theme_constant_override("separation", 2)
 		row.add_child(v)
-		var val := W.label(str(cells[i][0]), 16, T.TEXT, v)
+		var val := W.label(str(cells[i][0]), 15, T.TEXT, v)
 		val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		val.autowrap_mode = TextServer.AUTOWRAP_OFF
+		val.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		var cap := W.label(str(cells[i][1]), 12, T.DIM, v)
 		cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		cap.autowrap_mode = TextServer.AUTOWRAP_OFF
 
 
 func _about(a: Dictionary) -> void:
@@ -340,7 +410,8 @@ func _fill_history(a: Dictionary, c: Control, box: VBoxContainer, list: Array) -
 		left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		left.add_theme_constant_override("separation", 1)
 		h.add_child(left)
-		W.label(e.tag, 16, T.TEXT, left)
+		var tl := W.label(e.tag, 15, T.TEXT, left)
+		tl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		var first := Catalog.clean_notes(e.body, 80).split("\n")[0]
 		if first != "":
 			var nl := W.label(first, 13, T.DIM, left)
@@ -351,6 +422,7 @@ func _fill_history(a: Dictionary, c: Control, box: VBoxContainer, list: Array) -
 		rv.alignment = BoxContainer.ALIGNMENT_CENTER
 		h.add_child(rv)
 		var d := W.label(_date(e.date), 13, T.DIM, rv)
+		d.autowrap_mode = TextServer.AUTOWRAP_OFF
 		d.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		if e.tag == inst_tag:
 			W.pill(rv, "installée", T.OK)
@@ -360,9 +432,8 @@ func _fill_history(a: Dictionary, c: Control, box: VBoxContainer, list: Array) -
 
 func _main_button(a: Dictionary, status: String) -> Button:
 	var b := W.Btn.new("", "primary")
-	b.custom_minimum_size = Vector2(260, 58)
-	b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	b.add_theme_font_size_override("font_size", 19)
+	b.custom_minimum_size = Vector2(0, 52)
+	b.add_theme_font_size_override("font_size", 17)
 	b.set_kind("primary")
 	var failed: bool = ctx.installer.errors.has(app_name)
 	match status:
@@ -403,6 +474,7 @@ func _uninstall_row(a: Dictionary) -> Control:
 					rebuild()))
 		h.add_child(i3)
 		var l := W.label("Désinstaller", 15, T.DIM, h)
+		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	else:
 		var ok := W.Btn.new("Confirmer la désinstallation", "danger")
@@ -437,11 +509,12 @@ func _apk_card(a: Dictionary) -> void:
 	var apk := Catalog.pick_apk(a.release)
 	if apk.is_empty():
 		return
-	var qc := W.card(body)
+	var qc := W.card(_col)
+	W.label("Téléphone", 18, T.TEXT, qc)
 	var qr_url := str(apk.browser_download_url)
 	var qt: Texture2D = QR.texture(qr_url, 6)
 	var qh := HBoxContainer.new()
-	qh.add_theme_constant_override("separation", 18)
+	qh.add_theme_constant_override("separation", 16)
 	qc.add_child(qh)
 	if qt != null:
 		var fr := PanelContainer.new()
@@ -453,7 +526,7 @@ func _apk_card(a: Dictionary) -> void:
 		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		tr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		tr.custom_minimum_size = Vector2(170, 170)
+		tr.custom_minimum_size = Vector2(144, 144)
 		tr.tooltip_text = "Scanne avec ton téléphone"
 		fr.add_child(tr)
 	var qv := VBoxContainer.new()
@@ -477,10 +550,11 @@ func _screenshots(a: Dictionary) -> void:
 	var shots: Array = a.manifest.get("screenshots", [])
 	if shots.is_empty():
 		return
+	var shc := _section("Aperçu")
 	var sc := ScrollContainer.new()
 	sc.custom_minimum_size = Vector2(0, 250)
 	sc.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	body.add_child(sc)
+	shc.add_child(sc)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
 	sc.add_child(row)
@@ -500,5 +574,6 @@ func _screenshots(a: Dictionary) -> void:
 		tr.texture = tex
 		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		tr.custom_minimum_size = Vector2(250.0 * tex.get_width() / maxf(1.0, tex.get_height()), 240)
+		tr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST if tex.get_height() < 200 else CanvasItem.TEXTURE_FILTER_LINEAR
+		tr.custom_minimum_size = Vector2(240.0 * tex.get_width() / maxf(1.0, tex.get_height()), 240)
 		row.add_child(tr)
