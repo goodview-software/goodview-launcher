@@ -320,7 +320,7 @@ func refresh() -> void:
 	panel.visible = show
 	var shape: bool = types.has("rectangle") or types.has("diamond") or types.has("ellipse")
 	var lin: bool = types.has("arrow") or types.has("line") or types.has("freedraw")
-	_show("stroke", types.size() > 0 and not (types.size() == 1 and (types.has("zone") or types.has("image"))))
+	_show("stroke", types.size() > 0 and not (types.size() == 1 and (types.has("zone") or types.has("image") or types.has("msg"))))
 	_show("bg", shape)
 	_show("fill", shape)
 	_show("width", shape or lin)
