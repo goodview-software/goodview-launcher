@@ -1,5 +1,5 @@
 extends RefCounted
-## Markdown léger -> BBCode (RichTextLabel) : gras, italique, titres, listes, citations, code en ligne, liens.
+## Markdown léger -> BBCode (RichTextLabel) : gras, souligné __x__, définition au survol {{mot|déf}}, italique, titres, listes, citations, code en ligne, liens.
 ## Les blocs de code ``` sont séparés par blocks() pour être affichés avec un bouton Copier.
 
 
@@ -51,6 +51,11 @@ static func _fmt(t: String, accent: String) -> String:
 	var r := RegEx.new()
 	r.compile("\\*\\*(.+?)\\*\\*")
 	t = r.sub(t, "[b]$1[/b]", true)
+	r.compile("(?<![\\w])__(?!\\s)(.+?)(?<!\\s)__(?![\\w])")
+	t = r.sub(t, "[u]$1[/u]", true)
+	# Définition d'un mot au survol : {{mot|définition}}
+	r.compile("\\{\\{([^|{}]+)\\|([^{}]+)\\}\\}")
+	t = r.sub(t, "[hint=$2][color=#%s][u]$1[/u][/color][/hint]" % accent, true)
 	r.compile("(?<![\\*\\w])\\*(?![\\s\\*])(.+?)(?<![\\s\\*])\\*(?![\\*\\w])")
 	t = r.sub(t, "[i]$1[/i]", true)
 	r.compile("(?<![\\w])_(?![\\s_])(.+?)(?<![\\s_])_(?![\\w])")

@@ -157,7 +157,7 @@ static func is_vision(model: String) -> bool:
 ## Prompt système complet d'un assistant (ajoute la liste des collègues pour le chef d'orchestre et les experts).
 static func system_prompt(i: int, can_delegate: bool) -> String:
 	var u := get_u(i)
-	var s := str(u.prompt) + " Réponds en français sauf demande contraire, de façon claire et concise. Personnalité : " + str(u.personality)
+	var s := str(u.prompt) + " Réponds en français sauf demande contraire, de façon claire et concise. Mise en forme : **gras** pour les idées clés, __souligné__ pour insister, et {{mot|définition en un mot}} pour un terme technique ou difficile (la définition s'affiche au survol de la souris ; 1 à 3 par réponse maximum). Personnalité : " + str(u.personality)
 	if can_delegate:
 		s += "\nTes collègues (outil ask_assistant) : " + team_list(i)
 		if i == 0:
