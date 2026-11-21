@@ -6,7 +6,31 @@ extends "res://pages/page.gd"
 const U := preload("res://ui/universe.gd")
 const MD := preload("res://ui/markdown.gd")
 const Ollama := preload("res://core/ollama.gd")
+const Attach := preload("res://core/attach.gd")
 const FILE := "user://board.json"
+const IMG_DIR := "user://board_img/"
+## Types de zones : titre par défaut, mode par défaut, consigne donnée à l'IA.
+const KINDS := {
+	"problem": {"label": "Problème", "title": "Le problème", "mode": "etapes", "w": 340.0, "h": 280.0,
+		"prompt": "Cette zone sert à formuler le problème : aide à le clarifier (objectif, contraintes, critères de réussite) en posant au plus 3 questions précises."},
+	"ideas": {"label": "Idées", "title": "Idées", "mode": "brainstorm", "w": 320.0, "h": 260.0,
+		"prompt": "Cette zone sert à produire des idées et pistes de solution."},
+	"proscons": {"label": "Pour / contre", "title": "Pour / contre", "mode": "critique", "w": 320.0, "h": 260.0,
+		"prompt": "Cette zone sert à peser une option : liste clairement les arguments pour, puis contre, puis ton verdict."},
+	"decision": {"label": "Décision", "title": "Décision", "mode": "synthese", "w": 320.0, "h": 260.0,
+		"prompt": "Cette zone sert à décider : compare les options reçues selon des critères explicites et recommande-en une, avec les risques restants."},
+	"note": {"label": "Note", "title": "Note", "mode": "libre", "w": 300.0, "h": 220.0, "prompt": ""},
+	"image": {"label": "Image", "title": "Image", "mode": "libre", "w": 340.0, "h": 380.0,
+		"prompt": "Cette zone contient une image que tu peux voir. Décris-la précisément quand on te le demande, puis réponds aux questions à son sujet."},
+}
+const MODES := {
+	"libre": ["Libre", ""],
+	"brainstorm": ["Brainstorm", "Mode brainstorm : propose beaucoup d'idées variées et originales, sans les juger, en liste courte."],
+	"avocat": ["Avocat du diable", "Mode avocat du diable : conteste, cherche les failles, les risques et les contre-exemples."],
+	"critique": ["Critique", "Mode critique constructive : évalue ce qui est proposé, ses points forts, ses faiblesses et comment l'améliorer."],
+	"etapes": ["Pas à pas", "Mode pas à pas : raisonne par étapes numérotées et vérifie chaque étape avant de conclure."],
+	"synthese": ["Synthèse", "Mode synthèse : résume et structure l'essentiel, en pesant les options."],
+}
 const PORT_R := 9.0
 const PORT_DX := 14.0
 const MAX_HISTORY := 14
@@ -22,6 +46,9 @@ const ZMAX := 2.0
 const LOD := 0.5  # en dessous, les zones ne montrent que leur titre
 var canvas: Control
 var world: Control
+var imgs := {}  # id de zone image -> {b64, tex}
+var menu: PopupMenu
+var view_menu: PopupMenu
 var reqs := {}  # id -> Ollama.Req en cours
 var drag_from := ""
 var drag_pos := Vector2.ZERO
@@ -38,15 +65,29 @@ func _init() -> void:
 
 func build() -> void:
 	head_title.text = "Plan"
+	menu = PopupMenu.new()
+	for k in KINDS:
+		menu.add_item(str(KINDS[k].label), KINDS.keys().find(k))
+	menu.id_pressed.connect(func(i: int): _add_zone(str(KINDS.keys()[i])))
+	add_child(menu)
 	var add := W.Btn.new("+ Zone", "primary")
 	add.size_name = "sm"
-	add.tooltip_text = "Nouvelle zone"
-	add.pressed.connect(func(): _add_zone())
+	add.tooltip_text = "Nouvelle zone (choisis son type)"
+	add.pressed.connect(func(): menu.popup(Rect2i(Vector2i(add.get_screen_position() + Vector2(0, add.size.y)), Vector2i(0, 0))))
 	head_right.add_child(add)
+	view_menu = PopupMenu.new()
+	view_menu.add_item("Tout voir", 0)
+	view_menu.add_item("Exporter en Markdown", 1)
+	view_menu.id_pressed.connect(func(i: int):
+		if i == 0:
+			fit_all()
+		else:
+			export_markdown())
+	add_child(view_menu)
 	var fit := W.Btn.new("Vue", "ghost")
 	fit.size_name = "sm"
-	fit.tooltip_text = "Cadrer toutes les zones (molette : zoom, glisser le fond : déplacer)"
-	fit.pressed.connect(fit_all)
+	fit.tooltip_text = "Cadrer toutes les zones / exporter le raisonnement (molette : zoom, glisser le fond : déplacer)"
+	fit.pressed.connect(func(): view_menu.popup(Rect2i(Vector2i(fit.get_screen_position() + Vector2(0, fit.size.y)), Vector2i(0, 0))))
 	head_right.add_child(fit)
 	var qc := W.Btn.new("Chat", "ghost")
 	qc.size_name = "sm"
@@ -71,7 +112,8 @@ func build() -> void:
 		_load_models()
 	_load()
 	if zones.is_empty():
-		_add_zone("De quoi allons-nous parler aujourd'hui ?")
+		_add_zone("problem", "De quoi allons-nous parler aujourd'hui ?")
+	get_window().files_dropped.connect(_on_drop)
 	for d in zones:
 		_spawn(d)
 	_refresh_all()
@@ -86,6 +128,8 @@ func _process(dt: float) -> void:
 
 
 func _exit_tree() -> void:
+	if get_window().files_dropped.is_connected(_on_drop):
+		get_window().files_dropped.disconnect(_on_drop)
 	for id in reqs:
 		if reqs[id] != null:
 			(reqs[id] as Ollama.Req).cancel()
@@ -93,16 +137,33 @@ func _exit_tree() -> void:
 		_save()
 
 
-func _add_zone(title := "Nouvelle zone") -> void:
-	var c := c2w(canvas.size * 0.5) - Vector2(160, 110) if canvas != null and canvas.size.x > 10 else Vector2(40, 40)
-	c += Vector2(randf_range(-30, 30), randf_range(-30, 30))
-	var d := {"id": "z%d%03d" % [Time.get_ticks_msec(), randi() % 1000], "x": c.x, "y": c.y, "w": 320.0, "h": 260.0,
-			"title": title, "ai": int(ctx.active), "msgs": [], "summary": "", "closed": false}
+func _add_zone(kind := "note", title := "", at := Vector2.INF) -> Dictionary:
+	var K_: Dictionary = KINDS[kind]
+	var c := at
+	if c == Vector2.INF:
+		c = c2w(canvas.size * 0.5) - Vector2(float(K_.w) * 0.5, float(K_.h) * 0.4) if canvas != null and canvas.size.x > 10 else Vector2(40, 40)
+		c += Vector2(randf_range(-30, 30), randf_range(-30, 30))
+	var d := {"id": "z%d%03d" % [Time.get_ticks_msec(), randi() % 1000], "x": c.x, "y": c.y, "w": K_.w, "h": K_.h,
+			"title": title if title != "" else str(K_.title), "ai": int(ctx.active), "kind": kind, "mode": K_.mode,
+			"msgs": [], "summary": "", "closed": false, "img": ""}
+	if kind == "image":
+		var vi := _vision_ai()
+		if vi >= 0:
+			d.ai = vi
 	zones.append(d)
 	if canvas != null and world != null:
 		_spawn(d)
 		_refresh_all()
 		_touch()
+	return d
+
+
+## Assistant à vision (Brume par défaut) ; -1 si aucun modèle vision n'est installé.
+func _vision_ai() -> int:
+	for i in U.count():
+		if U.get_u(i).get("vision", false):
+			return i
+	return -1
 
 
 func _spawn(d: Dictionary) -> void:
@@ -111,6 +172,7 @@ func _spawn(d: Dictionary) -> void:
 	z.d = d
 	world.add_child(z)
 	nodes[d.id] = z
+	_load_img(str(d.id), str(d.get("img", "")))
 	z.build_ui()
 	z.refresh()
 	if zoom < LOD:
@@ -241,6 +303,10 @@ func delete_zone(id: String) -> void:
 		if reqs[id] != null:
 			(reqs[id] as Ollama.Req).cancel()
 		reqs.erase(id)
+	var dz := _zone(id)
+	if not dz.is_empty() and str(dz.get("img", "")) != "":
+		DirAccess.remove_absolute(str(dz.img))
+	imgs.erase(id)
 	zones = zones.filter(func(d): return d.id != id)
 	links = links.filter(func(l): return l.from != id and l.to != id)
 	if nodes.has(id):
@@ -276,6 +342,12 @@ func incoming_context(id: String) -> String:
 func _system(d: Dictionary) -> String:
 	var s := U.system_prompt(int(d.ai), false)
 	s += "\nTu travailles dans une zone d'un plan de réflexion (titre : « %s »). Sois concis." % str(d.title)
+	var kp := str(KINDS[d.kind].prompt)
+	if kp != "":
+		s += "\n" + kp
+	var mp := str(MODES[d.mode][1])
+	if mp != "":
+		s += "\n" + mp
 	var c := incoming_context(str(d.id))
 	if c != "":
 		s += "\nContexte venant des zones liées à celle-ci (à utiliser comme base de travail) :\n" + c
@@ -283,6 +355,14 @@ func _system(d: Dictionary) -> String:
 
 
 func _model(d: Dictionary) -> String:
+	if d.kind == "image":
+		var m := ctx.model_for(int(d.ai))
+		if ctx.model_is_vision(m):
+			return m
+		for x in ctx.models:
+			if ctx.model_is_vision(str(x.name)):
+				return str(x.name)
+		return ""
 	return ctx.model_for(int(d.ai))
 
 
@@ -323,6 +403,11 @@ func _history(d: Dictionary, upto: int) -> Array:
 	var from := maxi(0, upto - MAX_HISTORY)
 	for i in range(from, upto):
 		h.append({"role": d.msgs[i].role, "content": d.msgs[i].content})
+	if d.kind == "image" and imgs.has(d.id):
+		for m in h:
+			if m.role == "user":
+				m["images"] = [imgs[d.id].b64]  # l'image accompagne le premier message
+				break
 	return h
 
 
@@ -336,7 +421,7 @@ func _stream(d: Dictionary, msgs: Array, setter: Callable) -> void:
 			return
 	var model := _model(d)
 	if model == "":
-		setter.call("(Aucun modèle Ollama disponible : installe-en un depuis l'Assistant IA.)")
+		setter.call("(Aucun modèle vision installé : installe-en un, par ex. gemma3 ou qwen2.5vl, via Ollama.)" if d.kind == "image" else "(Aucun modèle Ollama disponible : installe-en un depuis l'Assistant IA.)")
 		_finish(id)
 		return
 	var req: Ollama.Req = ctx.ollama.chat(model, msgs, {"temperature": float(U.get_u(int(d.ai)).temp), "num_predict": 700})
@@ -379,6 +464,106 @@ func _finish(id: String) -> void:
 	_touch()
 
 
+# ------------------------------------------------------------------ Images
+
+func _load_img(id: String, path: String) -> void:
+	if path == "" or not FileAccess.file_exists(path):
+		return
+	var bytes := FileAccess.get_file_as_bytes(path)
+	var im := Image.new()
+	if im.load_jpg_from_buffer(bytes) != OK:
+		return
+	imgs[id] = {"b64": Marshalls.raw_to_base64(bytes), "tex": ImageTexture.create_from_image(im)}
+
+
+func set_image(id: String, path: String) -> bool:
+	var d := _zone(id)
+	if d.is_empty():
+		return false
+	var r := Attach.read(path)
+	if r.kind != "image":
+		ctx.notify("%s : image attendue (png, jpg, webp…)" % path.get_file(), "error")
+		return false
+	DirAccess.make_dir_recursive_absolute(IMG_DIR)
+	var file := IMG_DIR + id + ".jpg"
+	var f := FileAccess.open(file, FileAccess.WRITE)
+	if f == null:
+		return false
+	f.store_buffer(Marshalls.base64_to_raw(str(r.b64)))
+	f.close()
+	d.img = file
+	_load_img(id, file)
+	if nodes.has(id):
+		(nodes[id] as Zone).refresh()
+	_touch()
+	return true
+
+
+func pick_image(id: String) -> void:
+	var fp: Control = K.FilePicker.new()
+	fp.files_selected.connect(func(paths: PackedStringArray):
+		if not paths.is_empty():
+			set_image(id, paths[0]))
+	fp.open_in(router, OS.get_environment("HOME"))
+
+
+## Dépôt d'un fichier sur le plan : sur une zone image -> remplace ; ailleurs -> crée une zone image.
+func _on_drop(files: PackedStringArray) -> void:
+	if not is_visible_in_tree() or canvas == null:
+		return
+	var cp := canvas.get_local_mouse_position()
+	var wp := c2w(cp)
+	for path in files:
+		if str(path).get_extension().to_lower() not in Attach.IMG_EXTS:
+			continue
+		var zid := zone_at(wp)
+		var d := _zone(zid)
+		if d.is_empty() or d.kind != "image":
+			d = _add_zone("image", "", wp - Vector2(170, 40))
+			zid = str(d.id)
+		set_image(zid, path)
+		wp += Vector2(30, 30)
+
+
+# ------------------------------------------------------------------ Export
+
+func export_markdown() -> void:
+	var order := zones.duplicate()
+	order.sort_custom(func(a, b): return float(a.x) < float(b.x) if absf(float(a.x) - float(b.x)) > 60.0 else float(a.y) < float(b.y))
+	var out: PackedStringArray = ["# Plan de réflexion", ""]
+	for d in order:
+		var st := "clôturée" if d.closed else "ouverte"
+		out.append("## %s" % str(d.title))
+		out.append("*%s · %s · %s · %s*" % [KINDS[d.kind].label, MODES[d.mode][0], str(U.get_u(int(d.ai)).name), st])
+		var src: PackedStringArray = []
+		for l in links:
+			if l.to == d.id:
+				var sz := _zone(str(l.from))
+				if not sz.is_empty():
+					src.append(str(sz.title))
+		if not src.is_empty():
+			out.append("*Nourrie par : %s*" % ", ".join(src))
+		out.append("")
+		if d.closed and str(d.summary).strip_edges() != "":
+			out.append("**Synthèse**\n\n" + str(d.summary).strip_edges())
+		else:
+			for m in d.msgs:
+				out.append("**%s** : %s\n" % ["Toi" if m.role == "user" else str(U.get_u(int(d.ai)).name), str(m.content).strip_edges()])
+		out.append("")
+	var dir := OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
+	if dir == "":
+		dir = OS.get_environment("HOME")
+	var t := Time.get_datetime_dict_from_system()
+	var path := "%s/plan_%04d-%02d-%02d_%02d%02d.md" % [dir, t.year, t.month, t.day, t.hour, t.minute]
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		ctx.notify("Export impossible dans " + dir, "error")
+		return
+	f.store_string("\n".join(out))
+	f.close()
+	ctx.notify("Exporté : " + path)
+
+
 # ------------------------------------------------------------------ Sauvegarde
 
 func _save() -> void:
@@ -404,6 +589,9 @@ func _load() -> void:
 			world.scale = Vector2(zoom, zoom)
 		for d in zones:
 			d["closed"] = bool(d.get("closed", false))
+			d["kind"] = str(d.get("kind", "note")) if KINDS.has(str(d.get("kind", "note"))) else "note"
+			d["mode"] = str(d.get("mode", "libre")) if MODES.has(str(d.get("mode", "libre"))) else "libre"
+			d["img"] = str(d.get("img", ""))
 			d["msgs"] = d.get("msgs", [])
 			d["summary"] = str(d.get("summary", ""))
 		# une réponse interrompue (appli fermée en cours de route) ne laisse pas de zone « en écriture »
@@ -538,6 +726,10 @@ class Zone extends PanelContainer:
 	var close_b: Button
 	var info: Label
 	var logv: RichTextLabel
+	var chip: Label
+	var mode_o: OptionButton
+	var pic: Control
+	var an: Button
 	var input_row: HBoxContainer
 	var input: LineEdit
 	var mode := ""
@@ -587,12 +779,39 @@ class Zone extends PanelContainer:
 		del.tooltip_text = "Supprimer la zone"
 		del.pressed.connect(func(): board.delete_zone(str(d.id)))
 		head.add_child(del)
+		var row2 := HBoxContainer.new()
+		row2.add_theme_constant_override("separation", 6)
+		row2.mouse_filter = Control.MOUSE_FILTER_PASS
+		v.add_child(row2)
+		chip = Label.new()
+		chip.text = "◼ " + str(board.KINDS[d.kind].label).to_upper()
+		chip.add_theme_font_size_override("font_size", 11)
+		chip.mouse_filter = Control.MOUSE_FILTER_PASS
+		row2.add_child(chip)
+		mode_o = OptionButton.new()
+		var mi := 0
+		for mk in board.MODES:
+			mode_o.add_item(str(board.MODES[mk][0]), mi)
+			mode_o.set_item_metadata(mi, mk)
+			if mk == d.mode:
+				mode_o.select(mi)
+			mi += 1
+		mode_o.item_selected.connect(func(i: int):
+			d.mode = str(mode_o.get_item_metadata(i))
+			board._touch())
+		mode_o.tooltip_text = "Mode de raisonnement de l'IA dans cette zone"
+		row2.add_child(mode_o)
 		info = Label.new()
 		info.add_theme_font_size_override("font_size", 11)
 		info.add_theme_color_override("font_color", board.T.DIM)
 		info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		info.mouse_filter = Control.MOUSE_FILTER_PASS
 		v.add_child(info)
+		if d.kind == "image":
+			pic = PicBox.new()
+			pic.board = board
+			pic.d = d
+			v.add_child(pic)
 		logv = RichTextLabel.new()
 		logv.bbcode_enabled = true
 		logv.scroll_following = true
@@ -602,6 +821,12 @@ class Zone extends PanelContainer:
 		v.add_child(logv)
 		input_row = HBoxContainer.new()
 		v.add_child(input_row)
+		if d.kind == "image":
+			an = Button.new()
+			an.text = "Analyser"
+			an.tooltip_text = "Lance l'IA vision sur l'image"
+			an.pressed.connect(func(): board.send(str(d.id), "Analyse cette image : décris ce que tu vois en détail, puis ce qu'on peut en tirer."))
+			input_row.add_child(an)
 		input = LineEdit.new()
 		input.placeholder_text = "Parle dans cette zone…"
 		input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -635,6 +860,13 @@ class Zone extends PanelContainer:
 		close_b.disabled = busy
 		input_row.visible = not d.closed
 		input.editable = not busy
+		chip.add_theme_color_override("font_color", col)
+		mode_o.disabled = busy
+		if pic != null:
+			pic.queue_redraw()
+		if an != null:
+			an.visible = board.imgs.has(d.id)
+			an.disabled = busy
 		var src: PackedStringArray = []
 		for l in board.links:
 			if l.to == d.id:
@@ -711,3 +943,41 @@ class Zone extends PanelContainer:
 				d.h = size.y
 			board.canvas.queue_redraw()
 			queue_redraw()
+
+
+## Tableau image (cadre pixel art) : clic pour choisir une image, ou dépôt d'un fichier sur la zone.
+class PicBox extends Control:
+	var board: Node
+	var d: Dictionary
+
+	func _init() -> void:
+		custom_minimum_size = Vector2(0, 130)
+		size_flags_vertical = Control.SIZE_EXPAND_FILL
+		size_flags_stretch_ratio = 1.6
+		texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+
+	func _draw() -> void:
+		var col: Color = board.U.color(int(d.ai))
+		var wood := Color("7a5636")
+		draw_rect(Rect2(Vector2.ZERO, size), Color("2e1f13"))
+		draw_rect(Rect2(Vector2(3, 3), size - Vector2(6, 6)), wood)
+		draw_rect(Rect2(Vector2(10, 10), size - Vector2(20, 20)), Color("0b0e13"))
+		var inner := Rect2(Vector2(12, 12), size - Vector2(24, 24))
+		if board.imgs.has(d.id):
+			var tex: Texture2D = board.imgs[d.id].tex
+			var k := minf(inner.size.x / tex.get_width(), inner.size.y / tex.get_height())
+			var sz := Vector2(tex.get_width(), tex.get_height()) * k
+			draw_texture_rect(tex, Rect2(inner.get_center() - sz * 0.5, sz), false)
+		else:
+			for i in 8:
+				draw_rect(Rect2(inner.position.x + i * (inner.size.x / 8.0), inner.position.y, 6, 2), Color(col, 0.7))
+				draw_rect(Rect2(inner.position.x + i * (inner.size.x / 8.0), inner.end.y - 2, 6, 2), Color(col, 0.7))
+			draw_string(get_theme_default_font(), Vector2(inner.position.x, inner.get_center().y + 4), "Clique ou dépose une image ici",
+				HORIZONTAL_ALIGNMENT_CENTER, inner.size.x, 13, Color(col, 0.9))
+		for c in [Vector2(6, 6), Vector2(size.x - 8, 6), Vector2(6, size.y - 8), Vector2(size.x - 8, size.y - 8)]:
+			draw_rect(Rect2(c, Vector2(3, 3)), Color("c9a227"))
+
+	func _gui_input(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and e.pressed:
+			board.pick_image(str(d.id))
