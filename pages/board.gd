@@ -9,7 +9,9 @@ const Ollama := preload("res://core/ollama.gd")
 const Attach := preload("res://core/attach.gd")
 const LabTools := preload("res://core/lab_tools.gd")
 const Orchestra := preload("res://core/orchestra.gd")
-const Sketch := preload("res://ui/sketch.gd")
+const Surface := preload("res://ui/draw/surface.gd")
+const Bars := preload("res://ui/draw/bars.gd")
+const Geom := preload("res://ui/draw/geom.gd")
 const MAX_TOOL_ROUNDS := 4
 const FILE := "user://board.json"  # ancien fichier unique (migré vers le plan 1)
 const PLANS_DIR := "user://boards/"
@@ -47,41 +49,32 @@ const MODES := {
 	"etapes": ["Pas à pas", "Mode pas à pas : raisonne par étapes numérotées et vérifie chaque étape avant de conclure."],
 	"synthese": ["Synthèse", "Mode synthèse : résume et structure l'essentiel, en pesant les options."],
 }
-const PORT_R := 9.0
-const PORT_DX := 14.0
 const MAX_HISTORY := 14
 const CTX_CAP := 1500
 
-var zones: Array = []
-var links: Array = []
+var scene  # modèle de scène (ui/draw/scene.gd) : zones, cadres, flèches, formes dans une seule liste ordonnée
+var canvas: Control  # surface (ui/draw/surface.gd) : vue, rendu, outils
+var world: Control  # hôte des zones (suit pan/zoom)
+var bars: Control
 var nodes := {}  # id -> Zone
-var pan := Vector2(24, 24)
-var zoom := 1.0
-const ZMIN := 0.12
-const ZMAX := 2.0
-const LOD := 0.5  # en dessous, les zones ne montrent que leur titre
-var canvas: Control
-var world: Control
-var imgs := {}  # id de zone image -> {b64, tex}
+var imgs := {}  # id d'élément image / de zone image -> {b64, tex}
+var _img_miss := {}
 var menu: PopupMenu
 var view_menu: PopupMenu
 var plans: Array = []  # [{id, name}]
 var plan_id := ""
-var frames: Array = []  # cadres {id,x,y,w,h,title,color}
-var fnodes := {}
 var search_e: LineEdit
 var help_btn: Button
 var help_panel: PanelContainer
 var help_txt: RichTextLabel
-var sketch  # couche de dessin (ui/sketch.gd)
 var _rename: ConfirmationDialog
 var _rename_e: LineEdit
 var _deb := {}  # zones en débat
 var reqs := {}  # id -> Ollama.Req en cours
-var drag_from := ""
-var drag_pos := Vector2.ZERO
 var _dirty := false
 var _save_t := 0.0
+var _links: Array = []
+var _links_rev := -1
 
 
 func _init() -> void:
@@ -97,7 +90,7 @@ func build() -> void:
 	for k in KINDS:
 		menu.add_item(str(KINDS[k].label), KINDS.keys().find(k))
 	menu.add_separator()
-	menu.add_item("Cadre (regrouper des zones)", 100)
+	menu.add_item("Cadre (regrouper des éléments)", 100)
 	menu.id_pressed.connect(func(i: int):
 		if i == 100:
 			_add_frame()
@@ -114,7 +107,7 @@ func build() -> void:
 	add_child(view_menu)
 	var fit := W.Btn.new("Vue", "ghost")
 	fit.size_name = "sm"
-	fit.tooltip_text = "Cadrer toutes les zones / exporter le raisonnement (molette : zoom, glisser le fond : déplacer)"
+	fit.tooltip_text = "Tout voir, rechercher, exporter, plans (molette : défiler, Ctrl+molette : zoom, Espace+glisser : déplacer)"
 	fit.pressed.connect(func():
 		_build_view_menu()
 		view_menu.popup(Rect2i(Vector2i(fit.get_screen_position() + Vector2(0, fit.size.y)), Vector2i(0, 0))))
@@ -125,29 +118,33 @@ func build() -> void:
 	qc.pressed.connect(func(): router.go_tab("chat"))
 	head_right.add_child(qc)
 	scroll.visible = false
-	canvas = Canvas.new()
-	canvas.board = self
+	canvas = Surface.new()
 	canvas.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	canvas.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	canvas.custom_minimum_size = Vector2(100, 300)
-	canvas.clip_contents = true
 	canvas.set_meta("k_nolint", true)
 	_outer.add_child(canvas)
-	world = Control.new()
-	world.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	world.position = pan
-	world.scale = Vector2(zoom, zoom)
-	canvas.add_child(world)
+	canvas.setup(self)
+	scene = canvas.scene
+	world = canvas.world
+	scene.on_clone = _on_clone
+	scene.zone_added.connect(_spawn)
+	scene.zone_removed.connect(_on_zone_removed)
+	bars = Bars.new()
+	canvas.add_child(bars)
+	bars.setup(canvas)
 	search_e = LineEdit.new()
 	search_e.placeholder_text = "Rechercher dans le plan… (Entrée : aller à la 1re zone)"
 	search_e.visible = false
-	search_e.position = Vector2(10, 10)
-	search_e.custom_minimum_size = Vector2(280, 0)
+	search_e.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	search_e.offset_left = -170
+	search_e.offset_right = 170
+	search_e.offset_top = -56
+	search_e.offset_bottom = -12
+	search_e.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	search_e.text_changed.connect(_apply_search)
 	search_e.text_submitted.connect(func(_t: String): _goto_first_match())
 	canvas.add_child(search_e)
-	sketch = Sketch.new(self)
-	sketch.attach(canvas, world)
 	help_btn = Button.new()
 	help_btn.text = "?"
 	help_btn.tooltip_text = "Aide : comment marchent les fils (nourrit, critique, compare, fusionne)"
@@ -195,12 +192,10 @@ func build() -> void:
 		_load_models()
 	_init_plans()
 	_load()
-	if zones.is_empty() and frames.is_empty():
+	if scene.els.is_empty():
 		_add_zone("problem", "De quoi allons-nous parler aujourd'hui ?")
 	get_window().files_dropped.connect(_on_drop)
-	_spawn_all()
 	_refresh_all()
-	_apply_view()
 
 
 func _process(dt: float) -> void:
@@ -216,28 +211,56 @@ func _exit_tree() -> void:
 	for id in reqs:
 		if reqs[id] != null:
 			(reqs[id] as Ollama.Req).cancel()
+	if canvas != null:
+		canvas.edit_commit()
 	if _dirty:
 		_save()
+
+
+## Les zones (éléments de type « zone » de la scène), dans l'ordre des calques.
+func zones() -> Array:
+	return scene.zones()
+
+
+## Fils entre zones : flèches liées aux deux extrémités et portant un type (nourrit/critique/compare/fusionne).
+func links() -> Array:
+	if _links_rev == scene.rev:
+		return _links
+	_links_rev = scene.rev
+	_links = []
+	var seen := {}
+	for a in scene.arrows():
+		var t := str(a.get("link", ""))
+		if t == "":
+			continue
+		var fa: Dictionary = _zone(str(a.start))
+		var fb: Dictionary = _zone(str(a.end))
+		if fa.is_empty() or fb.is_empty() or fa.id == fb.id or seen.has(str(a.start) + ">" + str(a.end)):
+			continue
+		seen[str(a.start) + ">" + str(a.end)] = true
+		_links.append({"from": str(a.start), "to": str(a.end), "type": t if LINKS.has(t) else "feed", "arrow": str(a.id)})
+	return _links
 
 
 func _add_zone(kind := "note", title := "", at := Vector2.INF) -> Dictionary:
 	var K_: Dictionary = KINDS[kind]
 	var c := at
 	if c == Vector2.INF:
-		c = c2w(canvas.size * 0.5) - Vector2(float(K_.w) * 0.5, float(K_.h) * 0.4) if canvas != null and canvas.size.x > 10 else Vector2(40, 40)
+		c = canvas.c2w(canvas.size * 0.5) - Vector2(float(K_.w) * 0.5, float(K_.h) * 0.4) if canvas != null and canvas.size.x > 10 else Vector2(40, 40)
 		c += Vector2(randf_range(-30, 30), randf_range(-30, 30))
-	var d := {"id": "z%d%03d" % [Time.get_ticks_msec(), randi() % 1000], "x": c.x, "y": c.y, "w": K_.w, "h": K_.h,
+	var d := {"id": scene.uid("z"), "type": "zone", "x": c.x, "y": c.y, "w": K_.w, "h": K_.h, "angle": 0.0, "locked": false, "group": "", "opacity": 100.0,
 			"title": title if title != "" else str(K_.title), "ai": int(ctx.active), "kind": kind, "mode": K_.mode,
 			"msgs": [], "summary": "", "closed": false, "img": ""}
 	if kind == "image":
 		var vi := _vision_ai()
 		if vi >= 0:
 			d.ai = vi
-	zones.append(d)
-	if canvas != null and world != null:
-		_spawn(d)
-		_refresh_all()
-		_touch()
+	scene.add(d)
+	scene.select([d.id])
+	scene.commit()
+	canvas.tools.after_create()
+	_refresh_all()
+	_touch()
 	return d
 
 
@@ -249,7 +272,21 @@ func _vision_ai() -> int:
 	return -1
 
 
+func _norm_zone(d: Dictionary) -> void:
+	d["closed"] = bool(d.get("closed", false))
+	d["kind"] = str(d.get("kind", "note")) if KINDS.has(str(d.get("kind", "note"))) else "note"
+	d["mode"] = str(d.get("mode", "libre")) if MODES.has(str(d.get("mode", "libre"))) else "libre"
+	d["img"] = str(d.get("img", ""))
+	d["msgs"] = d.get("msgs", [])
+	d["summary"] = str(d.get("summary", ""))
+	d["title"] = str(d.get("title", "Zone"))
+	d["ai"] = clampi(int(d.get("ai", 0)), 0, maxi(U.count() - 1, 0))
+
+
 func _spawn(d: Dictionary) -> void:
+	if nodes.has(d.id) or world == null:
+		return
+	_norm_zone(d)
 	var z := Zone.new()
 	z.board = self
 	z.d = d
@@ -258,24 +295,35 @@ func _spawn(d: Dictionary) -> void:
 	_load_img(str(d.id), str(d.get("img", "")))
 	z.build_ui()
 	z.refresh()
-	if zoom < LOD:
-		z.set_lod(true)
+	sync_order()
+
+
+func _on_zone_removed(id: String) -> void:
+	if reqs.has(id):
+		if reqs[id] != null:
+			(reqs[id] as Ollama.Req).cancel()
+		reqs.erase(id)
+	_deb.erase(id)
+	if nodes.has(id):
+		(nodes[id] as Node).queue_free()
+		nodes.erase(id)
 
 
 func _zone(id: String) -> Dictionary:
-	for d in zones:
-		if d.id == id:
-			return d
-	return {}
+	var e: Dictionary = scene.by_id.get(id, {}) if scene != null else {}
+	return e if str(e.get("type", "")) == "zone" else {}
 
 
 func _touch() -> void:
 	_dirty = true
 	_save_t = 0.0
-	if canvas != null:
-		canvas.queue_redraw()
-	if sketch != null:
-		sketch.redraw()
+	if scene != null:
+		scene.mark_links()
+		canvas.redraw()
+
+
+func touch() -> void:
+	_touch()
 
 
 func _refresh_all() -> void:
@@ -283,138 +331,146 @@ func _refresh_all() -> void:
 		_fill_help()
 	for id in nodes:
 		(nodes[id] as Zone).refresh()
-	if canvas != null:
-		canvas.queue_redraw()
+	if scene != null:
+		scene.mark_links()
+		canvas.redraw()
+
+
+## Recopie la géométrie des éléments « zone » sur leurs nœuds (déplacement, redimensionnement, annuler…).
+func sync_zones(ids: Dictionary) -> void:
+	var list: Array = ids.keys() if not ids.is_empty() else nodes.keys()
+	for id in list:
+		if not nodes.has(id):
+			continue
+		var d := _zone(str(id))
+		if d.is_empty():
+			continue
+		var z: Control = nodes[id]
+		z.position = Vector2(float(d.x), float(d.y))
+		z.size = Vector2(float(d.w), float(d.h)).max(z.custom_minimum_size)
+		z.modulate.a = float(d.get("opacity", 100.0)) / 100.0 * float(z.get_meta("sdim", 1.0))
+
+
+func sync_order() -> void:
+	var i := 0
+	for d in zones():
+		if nodes.has(d.id):
+			world.move_child(nodes[d.id], i)
+			i += 1
+
+
+func links_changed() -> void:
+	_refresh_all()
+	_touch()
+
+
+func on_lod(_v: bool) -> void:
+	pass
+
+
+func zone_color(d: Dictionary) -> Color:
+	return U.color(int(d.get("ai", 0)))
+
+
+func link_style(a: Dictionary) -> Dictionary:
+	var s := _zone(str(a.get("start", "")))
+	var t := str(a.get("link", "feed"))
+	return {"color": U.color(int(s.get("ai", 0))) if not s.is_empty() else T.OK, "dashed": not bool(s.get("closed", false)),
+			"name": str(LINKS[t if LINKS.has(t) else "feed"][0])}
+
+
+func next_frame_color() -> String:
+	var n := 0
+	for e in scene.els:
+		if e.type == "frame":
+			n += 1
+	return str(FRAME_COLORS[n % FRAME_COLORS.size()])
+
+
+func _on_clone(old: String, new: String, el: Dictionary) -> void:
+	var key := "img" if el.type == "zone" else ("file" if el.type == "image" else "")
+	if key == "" or str(el.get(key, "")) == "":
+		return
+	var src := str(el[key])
+	if FileAccess.file_exists(src):
+		var dst := IMG_DIR + new + ".jpg"
+		DirAccess.make_dir_recursive_absolute(IMG_DIR)
+		DirAccess.copy_absolute(src, dst)
+		el[key] = dst
 
 
 # ------------------------------------------------------------------ Navigation (zoom / vue)
 
 func w2c(v: Vector2) -> Vector2:
-	return pan + v * zoom
+	return canvas.w2c(v)
 
 
 func c2w(v: Vector2) -> Vector2:
-	return (v - pan) / zoom
+	return canvas.c2w(v)
 
 
-func _apply_view() -> void:
-	world.position = pan
-	world.scale = Vector2(zoom, zoom)
-	var lod := zoom < LOD
-	for id in nodes:
-		(nodes[id] as Zone).set_lod(lod)
-	for id in fnodes:
-		(fnodes[id] as Frame).set_lod(lod)
-	canvas.queue_redraw()
-	_touch()
-
-
-## Zoom centré sur un point du canevas (molette / pincement).
-func zoom_at(cpos: Vector2, factor: float) -> void:
-	var nz := clampf(zoom * factor, ZMIN, ZMAX)
-	if is_equal_approx(nz, zoom):
-		return
-	var wp := c2w(cpos)
-	zoom = nz
-	pan = cpos - wp * zoom
-	_apply_view()
-
-
-## Cadre toutes les zones dans la vue.
+## Cadre tout le plan dans la vue.
 func fit_all() -> void:
-	if zones.is_empty() or canvas.size.x < 10:
-		return
-	var r := Rect2(float(zones[0].x), float(zones[0].y), float(zones[0].w), float(zones[0].h))
-	for d in zones:
-		r = r.merge(Rect2(float(d.x), float(d.y), float(d.w), float(d.h)))
-	r = r.grow(40.0)
-	zoom = clampf(minf(canvas.size.x / r.size.x, canvas.size.y / r.size.y), ZMIN, 1.0)
-	pan = canvas.size * 0.5 - r.get_center() * zoom
-	_apply_view()
+	canvas.fit_all()
 
 
 func focus_zone(id: String) -> void:
 	var d := _zone(id)
 	if d.is_empty():
 		return
-	zoom = 1.0
-	pan = canvas.size * 0.5 - Vector2(float(d.x) + float(d.w) * 0.5, float(d.y) + float(d.h) * 0.5)
-	_apply_view()
+	canvas.center_on(Geom.center(d), 1.0)
 
 
 func _input(e: InputEvent) -> void:
 	if canvas == null or not is_visible_in_tree():
 		return
 	if e is InputEventMouseButton and e.pressed and (e.button_index == MOUSE_BUTTON_WHEEL_UP or e.button_index == MOUSE_BUTTON_WHEEL_DOWN):
-		var cp := canvas.get_local_mouse_position()
-		if not Rect2(Vector2.ZERO, canvas.size).has_point(cp):
-			return
-		# sur une zone, la molette fait défiler son texte (Ctrl ou vue éloignée : zoom)
-		if zone_at(c2w(cp)) != "" and not e.ctrl_pressed and zoom >= LOD:
-			return
-		zoom_at(cp, 1.12 if e.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.12)
-		get_viewport().set_input_as_handled()
-	elif e is InputEventKey and e.pressed and sketch != null and sketch.key(e):
-		get_viewport().set_input_as_handled()
-	elif e is InputEventKey and e.pressed and e.keycode == KEY_F and (e.ctrl_pressed or e.meta_pressed):
+		# Ctrl+molette : zoom partout (même sur une zone) ; sinon la molette défile le texte ou la vue
+		if (e.ctrl_pressed or e.meta_pressed) and Rect2(Vector2.ZERO, canvas.size).has_point(canvas.get_local_mouse_position()):
+			canvas.wheel(e)
+			get_viewport().set_input_as_handled()
+	elif e is InputEventKey and e.keycode == KEY_F and e.pressed and (e.ctrl_pressed or e.meta_pressed):
 		_toggle_search()
 		get_viewport().set_input_as_handled()
-	elif e is InputEventMagnifyGesture:
-		var cp2 := canvas.get_local_mouse_position()
-		if Rect2(Vector2.ZERO, canvas.size).has_point(cp2):
-			zoom_at(cp2, e.factor)
+	elif e is InputEventKey and canvas.tools.key(e):
+		get_viewport().set_input_as_handled()
+	elif e is InputEventMagnifyGesture or e is InputEventPanGesture:
+		var cp := canvas.get_local_mouse_position()
+		if Rect2(Vector2.ZERO, canvas.size).has_point(cp):
+			if e is InputEventMagnifyGesture:
+				canvas.zoom_at(cp, e.factor, false)
+			else:
+				canvas.pan_by(-e.delta * 12.0)
+	elif e is InputEventScreenTouch or e is InputEventScreenDrag:
+		canvas.touch_event(e)
 
 
 # ------------------------------------------------------------------ Liens
 
-func add_link(a: String, b: String) -> void:
-	if a == b or a == "" or b == "":
-		return
-	for l in links:
-		if l.from == a and l.to == b:
-			return
-	links.append({"from": a, "to": b, "type": "feed"})
-	_refresh_all()
-	_touch()
-
-
-func cycle_link(i: int) -> void:
-	var t := str(links[i].get("type", "feed"))
-	links[i]["type"] = LINK_ORDER[(LINK_ORDER.find(t) + 1) % LINK_ORDER.size()]
-	_refresh_all()
-	_touch()
-
-
-func remove_link(i: int) -> void:
-	links.remove_at(i)
-	_refresh_all()
-	_touch()
+func cycle_link(a: Dictionary) -> void:
+	var t := str(a.get("link", "feed"))
+	a["link"] = LINK_ORDER[(LINK_ORDER.find(t) + 1) % LINK_ORDER.size()]
+	scene.mark(a)
+	scene.commit()
+	links_changed()
 
 
 func zone_at(world_pos: Vector2, except := "") -> String:
-	for i in range(zones.size() - 1, -1, -1):
-		var d: Dictionary = zones[i]
+	var zs := zones()
+	for i in range(zs.size() - 1, -1, -1):
+		var d: Dictionary = zs[i]
 		if d.id != except and Rect2(float(d.x), float(d.y), float(d.w), float(d.h)).has_point(world_pos):
 			return d.id
 	return ""
 
 
 func delete_zone(id: String) -> void:
-	if reqs.has(id):
-		if reqs[id] != null:
-			(reqs[id] as Ollama.Req).cancel()
-		reqs.erase(id)
-	var dz := _zone(id)
-	if not dz.is_empty() and str(dz.get("img", "")) != "":
-		DirAccess.remove_absolute(str(dz.img))
-	imgs.erase(id)
-	zones = zones.filter(func(d): return d.id != id)
-	links = links.filter(func(l): return l.from != id and l.to != id)
-	if nodes.has(id):
-		(nodes[id] as Zone).queue_free()
-		nodes.erase(id)
-	_refresh_all()
-	_touch()
+	if _zone(id).is_empty():
+		return
+	scene.remove([id])
+	scene.commit()
+	links_changed()
+	canvas.sel_changed.emit()
 
 
 ## Texte reçu par une zone depuis ses zones sources (synthèse si clôturée, sinon fin de la discussion).
@@ -431,7 +487,7 @@ func _src_body(s: Dictionary) -> String:
 
 func incoming_context(id: String) -> String:
 	var groups := {}
-	for l in links:
+	for l in links():
 		if l.to != id:
 			continue
 		var s := _zone(str(l.from))
@@ -449,7 +505,7 @@ func incoming_context(id: String) -> String:
 ## Empreinte du contenu des sources (change quand une source est modifiée) : sert à repérer les zones périmées.
 func incoming_sig(id: String) -> String:
 	var parts: PackedStringArray = []
-	for l in links:
+	for l in links():
 		if l.to == id:
 			var s := _zone(str(l.from))
 			if not s.is_empty():
@@ -462,7 +518,7 @@ func is_stale(d: Dictionary) -> bool:
 
 
 func has_sources(id: String) -> bool:
-	for l in links:
+	for l in links():
 		if l.to == id:
 			return true
 	return false
@@ -472,7 +528,7 @@ func has_sources(id: String) -> bool:
 func run_from_sources(id: String) -> void:
 	var d := _zone(id)
 	var kinds := {}
-	for l in links:
+	for l in links():
 		if l.to == id:
 			kinds[str(l.get("type", "feed"))] = true
 	var asks: PackedStringArray = []
@@ -700,13 +756,25 @@ func _finish(id: String) -> void:
 # ------------------------------------------------------------------ Images
 
 func _load_img(id: String, path: String) -> void:
-	if path == "" or not FileAccess.file_exists(path):
+	if path == "" or _img_miss.has(path):
+		return
+	if not FileAccess.file_exists(path):
+		_img_miss[path] = true
 		return
 	var bytes := FileAccess.get_file_as_bytes(path)
 	var im := Image.new()
 	if im.load_jpg_from_buffer(bytes) != OK:
+		_img_miss[path] = true
 		return
 	imgs[id] = {"b64": Marshalls.raw_to_base64(bytes), "tex": ImageTexture.create_from_image(im)}
+
+
+## Texture d'un élément « image » (chargée à la demande).
+func image_tex(el: Dictionary) -> Texture2D:
+	var id := str(el.id)
+	if not imgs.has(id):
+		_load_img(id, str(el.get("file", "")))
+	return imgs[id].tex if imgs.has(id) else null
 
 
 func set_image(id: String, path: String) -> bool:
@@ -718,7 +786,7 @@ func set_image(id: String, path: String) -> bool:
 		ctx.notify("%s : image attendue (png, jpg, webp…)" % path.get_file(), "error")
 		return false
 	DirAccess.make_dir_recursive_absolute(IMG_DIR)
-	var file := IMG_DIR + id + ".jpg"
+	var file: String = IMG_DIR + id + ".jpg"
 	var f := FileAccess.open(file, FileAccess.WRITE)
 	if f == null:
 		return false
@@ -740,7 +808,55 @@ func pick_image(id: String) -> void:
 	fp.open_in(router, OS.get_environment("HOME"))
 
 
-## Dépôt d'un fichier sur le plan : sur une zone image -> remplace ; ailleurs -> crée une zone image.
+## Crée un élément image (jpg dans user://board_img/) à partir d'octets jpg.
+func _image_element(bytes: PackedByteArray, at: Vector2) -> void:
+	var im := Image.new()
+	if im.load_jpg_from_buffer(bytes) != OK:
+		return
+	var id: String = scene.uid("e")
+	DirAccess.make_dir_recursive_absolute(IMG_DIR)
+	var file: String = IMG_DIR + id + ".jpg"
+	var f := FileAccess.open(file, FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_buffer(bytes)
+	f.close()
+	var k := minf(360.0 / maxf(im.get_width(), im.get_height()), 1.0)
+	var el: Dictionary = scene.make("image", at.x - im.get_width() * k * 0.5, at.y - im.get_height() * k * 0.5)
+	el.id = id
+	el.w = im.get_width() * k
+	el.h = im.get_height() * k
+	el.file = file
+	el.stroke = "9ca3af"
+	scene.add(el)
+	scene.select([id])
+	scene.commit()
+	canvas.tools.after_create()
+	_touch()
+
+
+func add_image_file(path: String, at: Vector2) -> void:
+	var r := Attach.read(path)
+	if r.kind != "image":
+		ctx.notify("%s : image attendue (png, jpg, webp…)" % path.get_file(), "error")
+		return
+	_image_element(Marshalls.base64_to_raw(str(r.b64)), at)
+
+
+func add_image_from_image(im: Image, at: Vector2) -> void:
+	if im != null and not im.is_empty():
+		_image_element(im.save_jpg_to_buffer(0.9), at)
+
+
+func add_image_dialog() -> void:
+	var fp: Control = K.FilePicker.new()
+	fp.files_selected.connect(func(paths: PackedStringArray):
+		if not paths.is_empty():
+			add_image_file(paths[0], canvas.c2w(canvas.size * 0.5)))
+	fp.open_in(router, OS.get_environment("HOME"))
+
+
+## Dépôt d'un fichier sur le plan : sur une zone image -> remplace ; ailleurs -> crée un élément image.
 func _on_drop(files: PackedStringArray) -> void:
 	if not is_visible_in_tree() or canvas == null:
 		return
@@ -749,12 +865,11 @@ func _on_drop(files: PackedStringArray) -> void:
 	for path in files:
 		if str(path).get_extension().to_lower() not in Attach.IMG_EXTS:
 			continue
-		var zid := zone_at(wp)
-		var d := _zone(zid)
-		if d.is_empty() or d.kind != "image":
-			d = _add_zone("image", "", wp - Vector2(170, 40))
-			zid = str(d.id)
-		set_image(zid, path)
+		var d := _zone(zone_at(wp))
+		if not d.is_empty() and d.kind == "image":
+			set_image(str(d.id), path)
+		else:
+			add_image_file(path, wp)
 		wp += Vector2(30, 30)
 
 
@@ -799,48 +914,40 @@ func _clear_nodes() -> void:
 			(reqs[id] as Ollama.Req).cancel()
 	reqs.clear()
 	_deb.clear()
-	for id in nodes:
+	scene.clear()  # émet zone_removed pour chaque zone : les nœuds sont libérés
+	for id in nodes.keys():
 		(nodes[id] as Node).queue_free()
-	for id in fnodes:
-		(fnodes[id] as Node).queue_free()
 	nodes.clear()
-	fnodes.clear()
-	zones = []
-	links = []
-	frames = []
 	imgs.clear()
-	if sketch != null:
-		sketch.clear()
+	_img_miss.clear()
 
 
 func switch_plan(id: String) -> void:
 	if id == plan_id:
 		return
+	canvas.edit_commit()
 	_save()
 	_clear_nodes()
 	plan_id = id
 	_save_index()
-	pan = Vector2(24, 24)
-	zoom = 1.0
+	canvas.set_view(Vector2(24, 24), 1.0)
 	_load()
-	if zones.is_empty() and frames.is_empty():
+	if scene.els.is_empty():
 		_add_zone("problem", "De quoi allons-nous parler aujourd'hui ?")
-	_spawn_all()
 	_refresh_all()
-	_apply_view()
 
 
 func _new_plan() -> void:
 	var id := "p%d" % Time.get_ticks_msec()
 	plans.append({"id": id, "name": "Plan %d" % (plans.size() + 1)})
+	canvas.edit_commit()
 	_save()
 	_clear_nodes()
 	plan_id = id
 	_save_index()
-	pan = Vector2(24, 24)
-	zoom = 1.0
+	scene.reset_history()
+	canvas.set_view(Vector2(24, 24), 1.0)
 	_add_zone("problem", "De quoi allons-nous parler ?")
-	_apply_view()
 	_save()
 
 
@@ -855,18 +962,19 @@ func _delete_plan() -> void:
 			next = str(e.id)
 			break
 	_dirty = false
-	for d in zones:
+	for d in zones():
 		if str(d.get("img", "")) != "":
 			DirAccess.remove_absolute(str(d.img))
+	for e in scene.els:
+		if e.type == "image" and str(e.get("file", "")) != "":
+			DirAccess.remove_absolute(str(e.file))
 	DirAccess.remove_absolute(_plan_file(old))
 	plans = plans.filter(func(e): return e.id != old)
 	_clear_nodes()
 	plan_id = next
 	_save_index()
 	_load()
-	_spawn_all()
 	_refresh_all()
-	_apply_view()
 
 
 func _build_view_menu() -> void:
@@ -874,6 +982,7 @@ func _build_view_menu() -> void:
 	view_menu.add_item("Tout voir", 0)
 	view_menu.add_item("Rechercher (Ctrl+F)", 2)
 	view_menu.add_item("Exporter en Markdown", 1)
+	view_menu.add_item("Exporter en PNG (sélection ou tout)", 6)
 	view_menu.add_separator("Plans")
 	for i in plans.size():
 		view_menu.add_radio_check_item(str(plans[i].name), 1000 + i)
@@ -898,6 +1007,8 @@ func _on_view_menu(i: int) -> void:
 			_rename.popup_centered(Vector2i(320, 110))
 		5:
 			_delete_plan()
+		6:
+			export_png()
 		_:
 			if i >= 1000 and i - 1000 < plans.size():
 				switch_plan(str(plans[i - 1000].id))
@@ -906,38 +1017,17 @@ func _on_view_menu(i: int) -> void:
 # ------------------------------------------------------------------ Cadres
 
 func _add_frame() -> void:
-	var c := c2w(canvas.size * 0.5) - Vector2(220, 160) if canvas.size.x > 10 else Vector2(0, 0)
-	var f := {"id": "f%d" % Time.get_ticks_msec(), "x": c.x, "y": c.y, "w": 480.0, "h": 340.0, "title": "Thème",
-			"color": FRAME_COLORS[frames.size() % FRAME_COLORS.size()]}
-	frames.append(f)
-	_spawn_frame(f)
+	var c := c2w(canvas.size * 0.5) - Vector2(240, 170) if canvas.size.x > 10 else Vector2(0, 0)
+	var f: Dictionary = scene.make("frame", c.x, c.y)
+	f.w = 480.0
+	f.h = 340.0
+	f.name = "Thème"
+	f.stroke = next_frame_color()
+	scene.add(f, 0)  # derrière tout le reste
+	scene.select([f.id])
+	scene.commit()
+	canvas.tools.after_create()
 	_touch()
-
-
-func _spawn_frame(f: Dictionary) -> void:
-	var fr := Frame.new()
-	fr.board = self
-	fr.d = f
-	world.add_child(fr)
-	world.move_child(fr, 0)  # derrière les zones
-	fnodes[f.id] = fr
-	fr.build_ui()
-	fr.set_lod(zoom < LOD)
-
-
-func delete_frame(id: String) -> void:
-	frames = frames.filter(func(f): return f.id != id)
-	if fnodes.has(id):
-		(fnodes[id] as Node).queue_free()
-		fnodes.erase(id)
-	_touch()
-
-
-func _spawn_all() -> void:
-	for f in frames:
-		_spawn_frame(f)
-	for d in zones:
-		_spawn(d)
 
 
 # ------------------------------------------------------------------ Aide (fils)
@@ -947,20 +1037,20 @@ func _fill_help() -> void:
 	var out: PackedStringArray = []
 	out.append("[b][color=#%s]Comment marchent les fils[/color][/b]" % acc)
 	out.append("Un fil envoie ce qu'une zone a conclu vers une autre. Texte envoyé : la [b]synthèse[/b] si la zone de départ est clôturée, sinon la fin de sa discussion.\n")
-	out.append("[b]Clic sur l'étiquette[/b] du fil = change son type · [b]clic droit[/b] = le supprime.\n")
+	out.append("[b]Clic sur l'étiquette[/b] du fil = change son type · [b]clic droit[/b] sur l'étiquette = le supprime. Un fil est une flèche liée aux deux zones : outil [b]Flèche (A)[/b] de l'une à l'autre, ou le rond ● d'une zone sélectionnée.\n")
 	out.append("[color=#%s]■ nourrit[/color] : l'arrivée s'appuie sur la source comme base de travail." % acc)
 	out.append("[color=#%s]■ critique[/color] : l'arrivée critique la source (faiblesses, risques, oublis)." % acc)
 	out.append("[color=#%s]■ compare[/color] : l'arrivée met plusieurs sources en balance, critère par critère. [b]Il faut au moins 2 fils compare vers la même zone.[/b]" % acc)
 	out.append("[color=#%s]■ fusionne[/color] : l'arrivée réunit plusieurs sources en une seule proposition et règle leurs contradictions. [b]Au moins 2 fils aussi.[/b]\n" % acc)
 	out.append("Ensuite, le bouton [b]Lancer[/b] de la zone d'arrivée démarre l'IA. Si une source change après coup : bordure orange ⚠ et bouton [b]Relancer[/b].\n")
 	out.append("[b][color=#%s]Dans ton plan[/color][/b]" % acc)
-	if links.is_empty():
-		out.append("Aucun fil pour l'instant : tire le rond ● d'une zone vers une autre.")
+	if links().is_empty():
+		out.append("Aucun fil pour l'instant : tire une flèche d'une zone vers une autre (outil Flèche, ou le rond ● d'une zone sélectionnée).")
 	var count := {}
-	for l in links:
+	for l in links():
 		var t := str(l.get("type", "feed"))
 		count[str(l.to) + "|" + t] = int(count.get(str(l.to) + "|" + t, 0)) + 1
-	for l in links:
+	for l in links():
 		var a := _zone(str(l.from))
 		var b := _zone(str(l.to))
 		if a.is_empty() or b.is_empty():
@@ -1009,14 +1099,16 @@ func _match(d: Dictionary, q: String) -> bool:
 
 func _apply_search(q: String) -> void:
 	q = q.strip_edges().to_lower()
-	for d in zones:
+	for d in zones():
 		if nodes.has(d.id):
-			(nodes[d.id] as Control).modulate = Color(1, 1, 1, 1.0 if _match(d, q) else 0.25)
+			var dim := 1.0 if _match(d, q) else 0.25
+			(nodes[d.id] as Control).set_meta("sdim", dim)
+			(nodes[d.id] as Control).modulate = Color(1, 1, 1, dim * float(d.get("opacity", 100.0)) / 100.0)
 
 
 func _goto_first_match() -> void:
 	var q := search_e.text.strip_edges().to_lower()
-	for d in zones:
+	for d in zones():
 		if q != "" and _match(d, q):
 			focus_zone(str(d.id))
 			return
@@ -1025,7 +1117,7 @@ func _goto_first_match() -> void:
 # ------------------------------------------------------------------ Export
 
 func export_markdown() -> void:
-	var order := zones.duplicate()
+	var order := zones().duplicate()
 	order.sort_custom(func(a, b): return float(a.x) < float(b.x) if absf(float(a.x) - float(b.x)) > 60.0 else float(a.y) < float(b.y))
 	var out: PackedStringArray = ["# Plan de réflexion", ""]
 	for d in order:
@@ -1033,7 +1125,7 @@ func export_markdown() -> void:
 		out.append("## %s" % str(d.title))
 		out.append("*%s · %s · %s · %s*" % [KINDS[d.kind].label, MODES[d.mode][0], str(U.get_u(int(d.ai)).name), st])
 		var src: PackedStringArray = []
-		for l in links:
+		for l in links():
 			if l.to == d.id:
 				var sz := _zone(str(l.from))
 				if not sz.is_empty():
@@ -1061,6 +1153,17 @@ func export_markdown() -> void:
 	ctx.notify("Exporté : " + path)
 
 
+func export_png() -> void:
+	canvas.edit_commit()
+	var path: String = await canvas.export_png(true)
+	if not is_instance_valid(self):
+		return
+	if path == "":
+		ctx.notify("Export PNG impossible (plan vide ou dossier Documents inaccessible).", "error")
+	else:
+		ctx.notify("Exporté : " + path)
+
+
 # ------------------------------------------------------------------ Sauvegarde
 
 func _save() -> void:
@@ -1068,173 +1171,25 @@ func _save() -> void:
 	_save_t = 0.0
 	var f := FileAccess.open(_plan_file(), FileAccess.WRITE)
 	if f != null:
-		f.store_string(JSON.stringify({"zones": zones, "links": links, "frames": frames, "shapes": sketch.to_save(), "pan": [pan.x, pan.y], "zoom": zoom}))
+		var v: Dictionary = scene.to_dict()
+		v["pan"] = [canvas.pan.x, canvas.pan.y]
+		v["zoom"] = canvas.zoom
+		v["grid"] = canvas.grid_on
+		f.store_string(JSON.stringify(v))
 
 
 func _load() -> void:
-	if not FileAccess.file_exists(_plan_file()):
-		return
-	var v = JSON.parse_string(FileAccess.get_file_as_string(_plan_file()))
+	var v = null
+	if FileAccess.file_exists(_plan_file()):
+		v = JSON.parse_string(FileAccess.get_file_as_string(_plan_file()))
 	if v is Dictionary:
-		zones = v.get("zones", [])
-		links = v.get("links", [])
-		frames = v.get("frames", [])
-		sketch.load_shapes(v.get("shapes", []))
+		scene.load_dict(v, func(ai: int) -> String: return U.color(ai).to_html(false))
 		var p = v.get("pan", [24, 24])
-		pan = Vector2(float(p[0]), float(p[1]))
-		zoom = clampf(float(v.get("zoom", 1.0)), ZMIN, ZMAX)
-		if world != null:
-			world.position = pan
-			world.scale = Vector2(zoom, zoom)
-		for d in zones:
-			d["closed"] = bool(d.get("closed", false))
-			d["kind"] = str(d.get("kind", "note")) if KINDS.has(str(d.get("kind", "note"))) else "note"
-			d["mode"] = str(d.get("mode", "libre")) if MODES.has(str(d.get("mode", "libre"))) else "libre"
-			d["img"] = str(d.get("img", ""))
-			d["msgs"] = d.get("msgs", [])
-			d["summary"] = str(d.get("summary", ""))
-		# une réponse interrompue (appli fermée en cours de route) ne laisse pas de zone « en écriture »
-
-
-# ------------------------------------------------------------------ Canevas (fond, fils, ports)
-
-class Canvas extends Control:
-	var board: Node
-	var panning := false
-
-	func _init() -> void:
-		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		mouse_default_cursor_shape = Control.CURSOR_DRAG
-
-	func _process(_dt: float) -> void:
-		if board != null and (board.drag_from != "" or not board.reqs.is_empty()):
-			queue_redraw()
-
-	static func bez(p0: Vector2, p1: Vector2, p2: Vector2, p3: Vector2, t: float) -> Vector2:
-		var u := 1.0 - t
-		return p0 * u * u * u + p1 * 3.0 * u * u * t + p2 * 3.0 * u * t * t + p3 * t * t * t
-
-	func port_pos(d: Dictionary) -> Vector2:
-		return board.w2c(Vector2(float(d.x) + float(d.w), float(d.y) + float(d.h) * 0.5)) + Vector2(PORT_DX, 0)
-
-	func _curve(a: Vector2, b: Vector2) -> PackedVector2Array:
-		var pts := PackedVector2Array()
-		for i in 29:
-			pts.append(bez(a, a + Vector2(90, 0), b - Vector2(90, 0), b, i / 28.0))
-		return pts
-
-	func _draw() -> void:
-		if board == null:
-			return
-		if board.sketch != null and board.sketch.has_bound():
-			board.sketch.redraw()  # flèches collées : suivent les zones déplacées
-		var T = board.T
-		var gs: float = 24.0 * board.zoom
-		while gs < 12.0:
-			gs *= 4.0
-		var off := Vector2(fposmod(board.pan.x, gs), fposmod(board.pan.y, gs))
-		var x := off.x
-		while x < size.x:
-			var y := off.y
-			while y < size.y:
-				draw_rect(Rect2(floorf(x), floorf(y), 2, 2), Color(1, 1, 1, 0.07))
-				y += gs
-			x += gs
-		for i in board.links.size():
-			var l: Dictionary = board.links[i]
-			var a: Dictionary = board._zone(str(l.from))
-			var b: Dictionary = board._zone(str(l.to))
-			if a.is_empty() or b.is_empty():
-				continue
-			var col: Color = board.U.color(int(a.ai))
-			var pts := _curve(port_pos(a), board.w2c(Vector2(float(b.x), float(b.y) + float(b.h) * 0.5)) + Vector2(-4, 0))
-			var solid: bool = a.closed
-			for k in pts.size() - 1:
-				if solid or k % 2 == 0:
-					draw_line(pts[k], pts[k + 1], Color(col, 0.95 if solid else 0.55), 3.0)
-			var e := pts[pts.size() - 1]
-			draw_colored_polygon(PackedVector2Array([e, e + Vector2(-12, -7), e + Vector2(-12, 7)]), col)
-			var m := pts[14]
-			var lt := str(board.LINKS[str(l.get("type", "feed"))][0])
-			var br := Rect2(m - Vector2(34, 9), Vector2(68, 18))
-			draw_rect(br, T.CARD_HI)
-			draw_rect(br, col, false, 2.0)
-			draw_string(get_theme_default_font(), Vector2(br.position.x, br.position.y + 13), lt, HORIZONTAL_ALIGNMENT_CENTER, br.size.x, 11, T.TEXT)
-		for d in board.zones:
-			var col2: Color = board.U.color(int(d.ai))
-			var p := port_pos(d)
-			var zr: float = float(d.x) + float(d.w)
-			draw_line(board.w2c(Vector2(zr, float(d.y) + float(d.h) * 0.5)), p, col2, 3.0)
-			draw_circle(p, PORT_R, col2 if d.closed else T.BG)
-			draw_arc(p, PORT_R, 0, TAU, 20, col2, 3.0)
-		if board.drag_from != "":
-			var s: Dictionary = board._zone(board.drag_from)
-			if not s.is_empty():
-				var c: Color = board.U.color(int(s.ai))
-				var pts2 := _curve(port_pos(s), board.drag_pos)
-				for k in pts2.size() - 1:
-					draw_line(pts2[k], pts2[k + 1], Color(c, 0.8), 3.0)
-		if board.zones.size() <= 1:
-			draw_string(get_theme_default_font(), Vector2(14, size.y - 14),
-				"Glisse le rond ● vers une autre zone pour la nourrir. Clic sur un fil : change son type ; clic droit : le supprime.",
-				HORIZONTAL_ALIGNMENT_LEFT, size.x - 28, 12, board.T.DIM)
-
-	func _gui_input(e: InputEvent) -> void:
-		if board == null:
-			return
-		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_RIGHT and e.pressed:
-			# clic droit sur l'étiquette d'un fil : le supprime
-			for i in board.links.size():
-				var l2: Dictionary = board.links[i]
-				var a2: Dictionary = board._zone(str(l2.from))
-				var b2: Dictionary = board._zone(str(l2.to))
-				if a2.is_empty() or b2.is_empty():
-					continue
-				var pts2 := _curve(port_pos(a2), board.w2c(Vector2(float(b2.x), float(b2.y) + float(b2.h) * 0.5)) + Vector2(-4, 0))
-				if Rect2(pts2[14] - Vector2(34, 9), Vector2(68, 18)).has_point(e.position):
-					board.remove_link(i)
-					return
-		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-			if e.pressed:
-				for d in board.zones:
-					if port_pos(d).distance_to(e.position) < PORT_R + 6.0:
-						board.drag_from = str(d.id)
-						board.drag_pos = e.position
-						return
-				for i in board.links.size():
-					var l: Dictionary = board.links[i]
-					var a: Dictionary = board._zone(str(l.from))
-					var b: Dictionary = board._zone(str(l.to))
-					if a.is_empty() or b.is_empty():
-						continue
-					var pts := _curve(port_pos(a), board.w2c(Vector2(float(b.x), float(b.y) + float(b.h) * 0.5)) + Vector2(-4, 0))
-					if Rect2(pts[14] - Vector2(34, 9), Vector2(68, 18)).has_point(e.position):
-						board.cycle_link(i)  # clic : change le type du fil (nourrit / critique / compare / fusionne)
-						return
-				if board.sketch.sel_press(e.position, e.double_click):
-					return
-				panning = true
-			else:
-				if board.sketch.dragging:
-					board.sketch.sel_release(e.position)
-					return
-				if board.drag_from != "":
-					board.add_link(board.drag_from, board.zone_at(board.c2w(e.position), board.drag_from))
-					board.drag_from = ""
-					queue_redraw()
-				if panning:
-					panning = false
-					board._touch()
-		elif e is InputEventMouseMotion:
-			if board.sketch.dragging:
-				board.sketch.sel_motion(e.position)
-			elif board.drag_from != "":
-				board.drag_pos = e.position
-				queue_redraw()
-			elif panning:
-				board.pan += e.relative
-				board.world.position = board.pan
-				queue_redraw()
+		canvas.set_view(Vector2(float(p[0]), float(p[1])), float(v.get("zoom", 1.0)))
+		canvas.grid_on = bool(v.get("grid", false))
+		_links_rev = -1
+	else:
+		scene.load_dict({"elements": []})
 
 
 # ------------------------------------------------------------------ Zone (rectangle)
@@ -1393,6 +1348,9 @@ class Zone extends PanelContainer:
 			input.text = ""
 			board.send(str(d.id), t))
 		input_row.add_child(sb)
+		hook(title_e, true)
+		for ch in get_children():
+			hook(ch)
 
 	func refresh() -> void:
 		var col: Color = board.U.color(int(d.ai))
@@ -1434,7 +1392,7 @@ class Zone extends PanelContainer:
 			an.visible = board.imgs.has(d.id)
 			an.disabled = busy
 		var src: PackedStringArray = []
-		for l in board.links:
+		for l in board.links():
 			if l.to == d.id:
 				var s: Dictionary = board._zone(str(l.from))
 				if not s.is_empty():
@@ -1459,59 +1417,38 @@ class Zone extends PanelContainer:
 			out.append("[color=#%s][b]— Synthèse —[/b][/color]\n%s" % [accent, board.MD.to_bbcode(str(d.summary), accent)])
 		logv.text = "\n\n".join(out)
 
-	func _draw() -> void:
-		var col: Color = board.U.color(int(d.ai))
-		for i in 3:
-			draw_rect(Rect2(size.x - 6 - i * 4, size.y - 6, 2, 2), Color(col, 0.8))
-			draw_rect(Rect2(size.x - 6, size.y - 6 - i * 4, 2, 2), Color(col, 0.8))
-
-	func set_lod(v: bool) -> void:
-		lod = v
-		var vb: Node = title_e.get_parent().get_parent()
-		for c in vb.get_children():
-			if c != title_e.get_parent():
-				c.visible = not v if c != info else (not v and info.text != "")
-		for c in title_e.get_parent().get_children():
-			if c != title_e:
-				c.visible = not v
-		title_e.editable = not v
-		title_e.mouse_filter = Control.MOUSE_FILTER_IGNORE if v else Control.MOUSE_FILTER_STOP
-		title_e.add_theme_font_size_override("font_size", clampi(int(18.0 / maxf(board.zoom, 0.12)), 16, 120) if v else 16)
-		if not v:
-			refresh()
-
+	## Les clics sur le bandeau / les marges sont traités par le moteur de scène (sélection, déplacement) ;
+	## un clic dans le contenu agit sur le contenu (et sélectionne la zone).
 	func _gui_input(e: InputEvent) -> void:
-		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-			if e.pressed:
-				move_to_front()
-				if lod and e.double_click:
-					board.focus_zone(str(d.id))
-					return
-				var wm: Vector2 = board.c2w(board.canvas.get_local_mouse_position())
-				if not lod and e.position.x > size.x - 22 and e.position.y > size.y - 22:
-					mode = "resize"
-					grab = wm - size
-				elif lod or e.position.y < 40:
-					mode = "drag"
-					grab = wm - position
-				else:
-					mode = ""
-			else:
-				if mode != "":
-					board._touch()
-				mode = ""
-		elif e is InputEventMouseMotion and mode != "":
-			var wm2: Vector2 = board.c2w(board.canvas.get_local_mouse_position())
-			if mode == "drag":
-				position = wm2 - grab
-				d.x = position.x
-				d.y = position.y
-			else:
-				size = (wm2 - grab).max(custom_minimum_size)
-				d.w = size.x
-				d.h = size.y
-			board.canvas.queue_redraw()
-			queue_redraw()
+		if e is InputEventMouseButton and e.pressed and (e.button_index == MOUSE_BUTTON_WHEEL_UP or e.button_index == MOUSE_BUTTON_WHEEL_DOWN or e.button_index == MOUSE_BUTTON_WHEEL_LEFT or e.button_index == MOUSE_BUTTON_WHEEL_RIGHT):
+			board.canvas.wheel(e)
+			accept_event()
+		elif e is InputEventMouseButton or e is InputEventMouseMotion:
+			board.canvas.tools.event(e)
+
+	## Branche un enfant : un clic gauche sélectionne la zone (sans bloquer l'enfant) ; avec `drag`, un clic sur une zone
+	## non sélectionnée (ou un geste en cours) est confié au moteur de scène pour pouvoir la déplacer par ce point.
+	func hook(c: Control, drag := false) -> void:
+		if c.has_meta("hooked"):
+			return
+		c.set_meta("hooked", true)
+		c.gui_input.connect(func(e: InputEvent):
+			var tl = board.canvas.tools
+			if tl.tool != "select":
+				return
+			if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and e.pressed:
+				if not board.scene.sel.has(d.id) or board.scene.sel.size() > 1:
+					if drag:
+						c.accept_event()
+						tl.event(e)
+					else:
+						tl.select_only(str(d.id))
+			elif drag and tl.busy() and (e is InputEventMouseMotion or (e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT)):
+				c.accept_event()
+				tl.event(e))
+		for ch in c.get_children():
+			if ch is Control:
+				hook(ch)
 
 
 ## Tableau image (cadre pixel art) : clic pour choisir une image, ou dépôt d'un fichier sur la zone.
@@ -1550,124 +1487,3 @@ class PicBox extends Control:
 	func _gui_input(e: InputEvent) -> void:
 		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and e.pressed:
 			board.pick_image(str(d.id))
-
-
-## Cadre coloré pour regrouper des zones par thème : le déplacer emporte les zones qu'il contient.
-class Frame extends Control:
-	var board: Node
-	var d: Dictionary
-	var bar: Control
-	var title_e: LineEdit
-	var tools: HBoxContainer
-	var handle: Control
-	var mode := ""
-	var grab := Vector2.ZERO
-	var held: Array = []  # zones emportées [{d, node, off}]
-	var lod := false
-
-	func build_ui() -> void:
-		position = Vector2(float(d.x), float(d.y))
-		size = Vector2(float(d.w), float(d.h))
-		mouse_filter = Control.MOUSE_FILTER_IGNORE
-		bar = Control.new()
-		bar.mouse_filter = Control.MOUSE_FILTER_STOP
-		bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
-		bar.offset_bottom = 38
-		bar.gui_input.connect(_bar_input)
-		add_child(bar)
-		var h := HBoxContainer.new()
-		h.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		h.offset_left = 6
-		h.offset_right = -6
-		h.mouse_filter = Control.MOUSE_FILTER_PASS
-		bar.add_child(h)
-		title_e = LineEdit.new()
-		title_e.text = str(d.title)
-		title_e.flat = true
-		title_e.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		title_e.text_changed.connect(func(t: String):
-			d.title = t
-			board._touch())
-		h.add_child(title_e)
-		tools = HBoxContainer.new()
-		h.add_child(tools)
-		var cb := Button.new()
-		cb.text = "◼"
-		cb.tooltip_text = "Changer la couleur"
-		cb.pressed.connect(func():
-			var i: int = board.FRAME_COLORS.find(str(d.color))
-			d.color = board.FRAME_COLORS[(i + 1) % board.FRAME_COLORS.size()]
-			queue_redraw()
-			board._touch())
-		tools.add_child(cb)
-		var xb := Button.new()
-		xb.text = "✕"
-		xb.tooltip_text = "Supprimer le cadre (les zones restent)"
-		xb.pressed.connect(func(): board.delete_frame(str(d.id)))
-		tools.add_child(xb)
-		handle = Control.new()
-		handle.mouse_filter = Control.MOUSE_FILTER_STOP
-		handle.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-		handle.offset_left = -26
-		handle.offset_top = -26
-		handle.gui_input.connect(_handle_input)
-		add_child(handle)
-
-	func set_lod(v: bool) -> void:
-		lod = v
-		tools.visible = not v
-		title_e.editable = not v
-		title_e.mouse_filter = Control.MOUSE_FILTER_IGNORE if v else Control.MOUSE_FILTER_STOP
-		title_e.add_theme_font_size_override("font_size", clampi(int(22.0 / maxf(board.zoom, 0.12)), 16, 140) if v else 16)
-		handle.visible = not v
-		queue_redraw()
-
-	func _draw() -> void:
-		var col := Color(str(d.color))
-		draw_rect(Rect2(Vector2.ZERO, size), Color(col, 0.07))
-		draw_rect(Rect2(Vector2.ZERO, size), Color(col, 0.55), false, 2.0)
-		draw_rect(Rect2(0, 0, size.x, 38), Color(col, 0.18))
-		for i in 3:
-			draw_rect(Rect2(size.x - 8 - i * 5, size.y - 5, 2, 2), Color(col, 0.9))
-			draw_rect(Rect2(size.x - 5, size.y - 8 - i * 5, 2, 2), Color(col, 0.9))
-
-	func _wm() -> Vector2:
-		return board.c2w(board.canvas.get_local_mouse_position())
-
-	func _bar_input(e: InputEvent) -> void:
-		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-			if e.pressed:
-				mode = "drag"
-				grab = _wm() - position
-				held.clear()
-				var r := Rect2(position, size)
-				for z in board.zones:
-					if r.has_point(Vector2(float(z.x) + float(z.w) * 0.5, float(z.y) + float(z.h) * 0.5)) and board.nodes.has(z.id):
-						held.append({"d": z, "node": board.nodes[z.id], "off": Vector2(float(z.x), float(z.y)) - position})
-			else:
-				mode = ""
-				board._touch()
-		elif e is InputEventMouseMotion and mode == "drag":
-			position = _wm() - grab
-			d.x = position.x
-			d.y = position.y
-			for hz in held:
-				var np: Vector2 = position + hz.off
-				hz.d.x = np.x
-				hz.d.y = np.y
-				(hz.node as Control).position = np
-			board.canvas.queue_redraw()
-
-	func _handle_input(e: InputEvent) -> void:
-		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-			if e.pressed:
-				mode = "resize"
-				grab = _wm() - size
-			else:
-				mode = ""
-				board._touch()
-		elif e is InputEventMouseMotion and mode == "resize":
-			size = (_wm() - grab).max(Vector2(200, 120))
-			d.w = size.x
-			d.h = size.y
-			queue_redraw()

@@ -233,6 +233,7 @@ func run(host: Node) -> void:
 	await run_ui()
 	await run_assistants()
 	await run_models()
+	await run_board()
 	await run_lint(host)
 	if OS.get_environment("GL_TEST_OLLAMA") == "1":
 		await run_live()
@@ -841,6 +842,19 @@ func run_lint(host: Control) -> void:
 		node.queue_free()
 		await frames(2)
 	host.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	await frames(2)
+
+
+# ------------------------------------------------------------------ Plan : moteur de scène (test_board.gd)
+
+func run_board() -> void:
+	router.instant = true
+	var pg: Control = router.push("board")
+	await frames(3)
+	var tb = load("res://test_board.gd").new()
+	await tb.run(self, pg)
+	if router.stack.size() > 1:
+		router.back()
 	await frames(2)
 
 
