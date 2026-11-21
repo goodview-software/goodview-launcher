@@ -9,6 +9,9 @@ var _prog: ProgressBar
 var _prog_lbl: Label
 var _star: W.IconBtn
 var _connected := false
+const MONTHS := ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
+
+var _hist := {}  # app -> liste des releases (évite de re-interroger GitHub à chaque reconstruction)
 var _shots := {}  # chemin -> texture (évite de retélécharger à chaque reconstruction)
 
 
@@ -71,7 +74,7 @@ func _content(a: Dictionary) -> void:
 	var inst: Dictionary = ctx.store.installed.get(a.name, {})
 	var queued := ctx.installer.is_queued(app_name)
 
-	var ic := app_icon(a, 200, true)
+	var ic := app_icon(a, 170, true)
 	if status == "ok":
 		ic.badge = T.OK
 	body.add_child(ic)
@@ -90,6 +93,8 @@ func _content(a: Dictionary) -> void:
 	var s := status_pill(a)
 	if s[0] != tag:
 		W.pill(chips, s[0], s[1])
+
+	_stats(a)
 
 	# notes de version visibles avant de mettre à jour
 	if status == "update":
@@ -137,9 +142,17 @@ func _content(a: Dictionary) -> void:
 			el.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		body.add_child(_main_button(a, status))
 
+	_screenshots(a)
+	_about(a)
+	_notes(a, status)
+	_info(a, inst)
+	_history(a)
 	_apk_card(a)
+	_manage_card(a, status, inst)
 
-	# réglages de l'app installée
+
+func _manage_card(a: Dictionary, status: String, inst: Dictionary) -> void:
+	# gérer l'app
 	var card := W.card(body)
 	var r1 := HBoxContainer.new()
 	r1.add_theme_constant_override("separation", 14)
@@ -176,17 +189,173 @@ func _content(a: Dictionary) -> void:
 		r2.add_child(tg2)
 		card.add_child(_uninstall_row(a))
 
-	_screenshots(a)
+
+static func _date(iso: String) -> String:
+	if iso.length() < 10:
+		return "—"
+	return "%d %s %s" % [iso.substr(8, 2).to_int(), MONTHS[clampi(iso.substr(5, 2).to_int() - 1, 0, 11)], iso.substr(0, 4)]
+
+
+func _section(title: String, right := "") -> VBoxContainer:
+	var c := W.card(body)
+	var h := HBoxContainer.new()
+	c.add_child(h)
+	var t := W.label(title, 18, T.TEXT, h)
+	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if right != "":
+		var r := W.label(right, 13, T.DIM, h)
+		r.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	return c
+
+
+func _kv(parent: Control, key: String, value: String) -> void:
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 12)
+	parent.add_child(h)
+	var k := W.label(key, 15, T.DIM, h)
+	k.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var v := W.label(value, 15, T.TEXT, h)
+	v.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+
+## Bandeau de chiffres clés : version · taille · date · plateformes.
+func _stats(a: Dictionary) -> void:
+	var tag := Catalog.tag(a)
+	if tag == "":
+		return
+	var plats := PackedStringArray()
+	if not a.asset.is_empty():
+		plats.append("Linux")
+	if not Catalog.pick_apk(a.release).is_empty():
+		plats.append("Android")
+	var cells: Array = [
+		[tag, "Version"],
+		[ctx.fmt_size(float(a.asset.get("size", 0))) if not a.asset.is_empty() else "—", "Taille"],
+		[_date(Catalog.published(a)).left(-5) if Catalog.published(a).length() >= 10 else "—", "Publiée"],
+		[" · ".join(plats) if not plats.is_empty() else "—", "Plateformes"],
+	]
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", T.style(T.CARD, 22, 14))
+	body.add_child(panel)
+	var row := HBoxContainer.new()
+	panel.add_child(row)
+	for i in cells.size():
+		if i > 0:
+			var sep := ColorRect.new()
+			sep.color = Color(1, 1, 1, 0.07)
+			sep.custom_minimum_size = Vector2(1, 0)
+			row.add_child(sep)
+		var v := VBoxContainer.new()
+		v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		v.add_theme_constant_override("separation", 2)
+		row.add_child(v)
+		var val := W.label(str(cells[i][0]), 16, T.TEXT, v)
+		val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		val.autowrap_mode = TextServer.AUTOWRAP_OFF
+		var cap := W.label(str(cells[i][1]), 12, T.DIM, v)
+		cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+
+
+func _about(a: Dictionary) -> void:
 	var desc := str(a.manifest.get("description", ""))
-	if desc != "":
-		var dc := W.card(body)
-		W.label("À propos", 18, T.TEXT, dc)
-		W.label(desc, 15, T.DIM, dc)
-	var notes2 := Catalog.clean_notes(str(a.release.get("body", "")))
-	if notes2 != "" and status != "update":
-		var nc2 := W.card(body)
-		W.label("Nouveautés · " + tag, 18, T.TEXT, nc2)
-		W.label(notes2, 15, T.DIM, nc2)
+	if desc == "":
+		return
+	var c := _section("À propos")
+	W.label(desc, 15, T.DIM, c)
+
+
+func _notes(a: Dictionary, status: String) -> void:
+	var notes := Catalog.clean_notes(str(a.release.get("body", "")))
+	if notes == "" or status == "update":
+		return
+	var c := _section("Nouveautés", "%s · %s" % [Catalog.tag(a), _date(Catalog.published(a))])
+	W.label(notes, 15, T.DIM, c)
+
+
+func _info(a: Dictionary, inst: Dictionary) -> void:
+	var tag := Catalog.tag(a)
+	var c := _section("Informations")
+	_kv(c, "Dépôt", "%s/%s" % [a.org, a.name])
+	if tag != "":
+		_kv(c, "Dernière version", tag)
+	if not inst.is_empty():
+		_kv(c, "Version installée", str(inst.get("tag", "?")))
+	if not a.asset.is_empty():
+		_kv(c, "Taille du téléchargement", ctx.fmt_size(float(a.asset.get("size", 0))))
+	var dl := 0
+	for x in a.release.get("assets", []):
+		dl += int(x.get("download_count", 0))
+	if dl > 0:
+		_kv(c, "Téléchargements", str(dl))
+	var lic := str(a.repo.get("license", ""))
+	if lic != "" and lic != "NOASSERTION":
+		_kv(c, "Licence", lic)
+	if int(a.repo.get("stars", 0)) > 0:
+		_kv(c, "Étoiles", str(int(a.repo.stars)))
+	var pushed := str(a.repo.get("pushed_at", ""))
+	if pushed != "":
+		_kv(c, "Code mis à jour", _date(pushed))
+
+
+## Historique des versions (dernières releases), chargé une fois par app.
+func _history(a: Dictionary) -> void:
+	var c := _section("Versions")
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	c.add_child(box)
+	if _hist.has(a.name):
+		_fill_history(a, c, box, _hist[a.name])
+		return
+	var sk := W.Skeleton.new()
+	sk.custom_minimum_size = Vector2(0, 44)
+	box.add_child(sk)
+	var r: Array = await ctx.catalog.get_json("%s/repos/%s/%s/releases?per_page=6" % [Catalog.API, a.org, a.name])
+	if not is_instance_valid(c) or not c.is_inside_tree():
+		return
+	if r[0] != 200 or not (r[1] is Array):
+		c.get_parent().queue_free()
+		return
+	var list: Array = []
+	for rel in r[1]:
+		list.append({"tag": str(rel.get("tag_name", "")), "date": str(rel.get("published_at", "")),
+				"body": str(rel.get("body", ""))})
+	_hist[a.name] = list
+	_fill_history(a, c, box, list)
+
+
+func _fill_history(a: Dictionary, c: Control, box: VBoxContainer, list: Array) -> void:
+	for ch in box.get_children():
+		ch.queue_free()
+	if list.size() < 2:
+		c.get_parent().queue_free()  # une seule version : rien à historiser
+		return
+	var inst_tag := str(ctx.store.installed.get(a.name, {}).get("tag", ""))
+	for i in list.size():
+		var e: Dictionary = list[i]
+		var h := HBoxContainer.new()
+		h.add_theme_constant_override("separation", 10)
+		box.add_child(h)
+		var left := VBoxContainer.new()
+		left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		left.add_theme_constant_override("separation", 1)
+		h.add_child(left)
+		W.label(e.tag, 16, T.TEXT, left)
+		var first := Catalog.clean_notes(e.body, 80).split("\n")[0]
+		if first != "":
+			var nl := W.label(first, 13, T.DIM, left)
+			nl.autowrap_mode = TextServer.AUTOWRAP_OFF
+			nl.clip_text = true
+		var rv := VBoxContainer.new()
+		rv.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		rv.alignment = BoxContainer.ALIGNMENT_CENTER
+		h.add_child(rv)
+		var d := W.label(_date(e.date), 13, T.DIM, rv)
+		d.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		if e.tag == inst_tag:
+			W.pill(rv, "installée", T.OK)
+		elif i == 0:
+			W.pill(rv, "dernière", T.DIM)
 
 
 func _main_button(a: Dictionary, status: String) -> Button:

@@ -171,7 +171,7 @@ static func _trim_release(rel: Dictionary) -> Dictionary:
 	var assets: Array = []
 	for x in rel.get("assets", []):
 		assets.append({"name": x.get("name", ""), "size": x.get("size", 0),
-				"browser_download_url": x.get("browser_download_url", "")})
+				"browser_download_url": x.get("browser_download_url", ""), "download_count": x.get("download_count", 0)})
 	return {"tag_name": rel.get("tag_name", ""), "body": rel.get("body", ""),
 			"published_at": rel.get("published_at", ""), "assets": assets}
 
@@ -250,7 +250,10 @@ func refresh() -> void:
 			var is_new := a.is_empty()
 			if is_new:
 				a = {"name": repo.name, "org": org, "repo": {}, "release": {}, "asset": {}, "icon": null, "manifest": {}}
-			a.repo = {"description": repo.get("description", "")}
+			var lic = repo.get("license")
+			a.repo = {"description": repo.get("description", ""), "stars": repo.get("stargazers_count", 0),
+					"pushed_at": repo.get("pushed_at", ""),
+					"license": str(lic.get("spdx_id", "")) if lic is Dictionary else ""}
 			await fetch_release(a)
 			var m: Array = await get_bytes("%s/%s/%s/HEAD/app.json" % [RAW, org, repo.name])
 			if m[0] == 200:
