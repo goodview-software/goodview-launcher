@@ -1,0 +1,15 @@
+config_version=5
+
+[application]
+config/name="Goodview Launcher"
+config/description="Bundle logiciel Goodview : télécharge, met à jour et lance toutes les apps de l'organisation GitHub goodview-software."
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.7")
+
+[display]
+window/size/viewport_width=1100
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
