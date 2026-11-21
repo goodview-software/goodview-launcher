@@ -16,6 +16,10 @@ var zones: Array = []
 var links: Array = []
 var nodes := {}  # id -> Zone
 var pan := Vector2(24, 24)
+var zoom := 1.0
+const ZMIN := 0.12
+const ZMAX := 2.0
+const LOD := 0.5  # en dessous, les zones ne montrent que leur titre
 var canvas: Control
 var world: Control
 var reqs := {}  # id -> Ollama.Req en cours
@@ -36,8 +40,14 @@ func build() -> void:
 	head_title.text = "Plan"
 	var add := W.Btn.new("+ Zone", "primary")
 	add.size_name = "sm"
+	add.tooltip_text = "Nouvelle zone"
 	add.pressed.connect(func(): _add_zone())
 	head_right.add_child(add)
+	var fit := W.Btn.new("Vue", "ghost")
+	fit.size_name = "sm"
+	fit.tooltip_text = "Cadrer toutes les zones (molette : zoom, glisser le fond : déplacer)"
+	fit.pressed.connect(fit_all)
+	head_right.add_child(fit)
 	var qc := W.Btn.new("Chat", "ghost")
 	qc.size_name = "sm"
 	qc.tooltip_text = "Chat rapide (conversation classique)"
@@ -55,6 +65,7 @@ func build() -> void:
 	world = Control.new()
 	world.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	world.position = pan
+	world.scale = Vector2(zoom, zoom)
 	canvas.add_child(world)
 	_load()
 	if zones.is_empty():
@@ -62,6 +73,7 @@ func build() -> void:
 	for d in zones:
 		_spawn(d)
 	_refresh_all()
+	_apply_view()
 
 
 func _process(dt: float) -> void:
@@ -79,7 +91,7 @@ func _exit_tree() -> void:
 
 
 func _add_zone(title := "Nouvelle zone") -> void:
-	var c := canvas.size * 0.5 - pan - Vector2(160, 110) if canvas != null and canvas.size.x > 10 else Vector2(40, 40)
+	var c := c2w(canvas.size * 0.5) - Vector2(160, 110) if canvas != null and canvas.size.x > 10 else Vector2(40, 40)
 	c += Vector2(randf_range(-30, 30), randf_range(-30, 30))
 	var d := {"id": "z%d%03d" % [Time.get_ticks_msec(), randi() % 1000], "x": c.x, "y": c.y, "w": 320.0, "h": 260.0,
 			"title": title, "ai": int(ctx.active), "msgs": [], "summary": "", "closed": false}
@@ -98,6 +110,8 @@ func _spawn(d: Dictionary) -> void:
 	nodes[d.id] = z
 	z.build_ui()
 	z.refresh()
+	if zoom < LOD:
+		z.set_lod(true)
 
 
 func _zone(id: String) -> Dictionary:
@@ -119,6 +133,77 @@ func _refresh_all() -> void:
 		(nodes[id] as Zone).refresh()
 	if canvas != null:
 		canvas.queue_redraw()
+
+
+# ------------------------------------------------------------------ Navigation (zoom / vue)
+
+func w2c(v: Vector2) -> Vector2:
+	return pan + v * zoom
+
+
+func c2w(v: Vector2) -> Vector2:
+	return (v - pan) / zoom
+
+
+func _apply_view() -> void:
+	world.position = pan
+	world.scale = Vector2(zoom, zoom)
+	var lod := zoom < LOD
+	for id in nodes:
+		(nodes[id] as Zone).set_lod(lod)
+	canvas.queue_redraw()
+	_touch()
+
+
+## Zoom centré sur un point du canevas (molette / pincement).
+func zoom_at(cpos: Vector2, factor: float) -> void:
+	var nz := clampf(zoom * factor, ZMIN, ZMAX)
+	if is_equal_approx(nz, zoom):
+		return
+	var wp := c2w(cpos)
+	zoom = nz
+	pan = cpos - wp * zoom
+	_apply_view()
+
+
+## Cadre toutes les zones dans la vue.
+func fit_all() -> void:
+	if zones.is_empty() or canvas.size.x < 10:
+		return
+	var r := Rect2(float(zones[0].x), float(zones[0].y), float(zones[0].w), float(zones[0].h))
+	for d in zones:
+		r = r.merge(Rect2(float(d.x), float(d.y), float(d.w), float(d.h)))
+	r = r.grow(40.0)
+	zoom = clampf(minf(canvas.size.x / r.size.x, canvas.size.y / r.size.y), ZMIN, 1.0)
+	pan = canvas.size * 0.5 - r.get_center() * zoom
+	_apply_view()
+
+
+func focus_zone(id: String) -> void:
+	var d := _zone(id)
+	if d.is_empty():
+		return
+	zoom = 1.0
+	pan = canvas.size * 0.5 - Vector2(float(d.x) + float(d.w) * 0.5, float(d.y) + float(d.h) * 0.5)
+	_apply_view()
+
+
+func _input(e: InputEvent) -> void:
+	if canvas == null or not is_visible_in_tree():
+		return
+	if e is InputEventMouseButton and e.pressed and (e.button_index == MOUSE_BUTTON_WHEEL_UP or e.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+		var cp := canvas.get_local_mouse_position()
+		if not Rect2(Vector2.ZERO, canvas.size).has_point(cp):
+			return
+		# sur une zone, la molette fait défiler son texte (Ctrl ou vue éloignée : zoom)
+		if zone_at(c2w(cp)) != "" and not e.ctrl_pressed and zoom >= LOD:
+			return
+		zoom_at(cp, 1.12 if e.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.12)
+		get_viewport().set_input_as_handled()
+	elif e is InputEventMagnifyGesture:
+		var cp2 := canvas.get_local_mouse_position()
+		if Rect2(Vector2.ZERO, canvas.size).has_point(cp2):
+			zoom_at(cp2, e.factor)
 
 
 # ------------------------------------------------------------------ Liens
@@ -277,7 +362,7 @@ func _save() -> void:
 	_save_t = 0.0
 	var f := FileAccess.open(FILE, FileAccess.WRITE)
 	if f != null:
-		f.store_string(JSON.stringify({"zones": zones, "links": links, "pan": [pan.x, pan.y]}))
+		f.store_string(JSON.stringify({"zones": zones, "links": links, "pan": [pan.x, pan.y], "zoom": zoom}))
 
 
 func _load() -> void:
@@ -289,8 +374,10 @@ func _load() -> void:
 		links = v.get("links", [])
 		var p = v.get("pan", [24, 24])
 		pan = Vector2(float(p[0]), float(p[1]))
+		zoom = clampf(float(v.get("zoom", 1.0)), ZMIN, ZMAX)
 		if world != null:
 			world.position = pan
+			world.scale = Vector2(zoom, zoom)
 		for d in zones:
 			d["closed"] = bool(d.get("closed", false))
 			d["msgs"] = d.get("msgs", [])
@@ -317,7 +404,7 @@ class Canvas extends Control:
 		return p0 * u * u * u + p1 * 3.0 * u * u * t + p2 * 3.0 * u * t * t + p3 * t * t * t
 
 	func port_pos(d: Dictionary) -> Vector2:
-		return board.pan + Vector2(float(d.x) + float(d.w) + PORT_DX, float(d.y) + float(d.h) * 0.5)
+		return board.w2c(Vector2(float(d.x) + float(d.w), float(d.y) + float(d.h) * 0.5)) + Vector2(PORT_DX, 0)
 
 	func _curve(a: Vector2, b: Vector2) -> PackedVector2Array:
 		var pts := PackedVector2Array()
@@ -329,7 +416,9 @@ class Canvas extends Control:
 		if board == null:
 			return
 		var T = board.T
-		var gs := 24.0
+		var gs: float = 24.0 * board.zoom
+		while gs < 12.0:
+			gs *= 4.0
 		var off := Vector2(fposmod(board.pan.x, gs), fposmod(board.pan.y, gs))
 		var x := off.x
 		while x < size.x:
@@ -345,7 +434,7 @@ class Canvas extends Control:
 			if a.is_empty() or b.is_empty():
 				continue
 			var col: Color = board.U.color(int(a.ai))
-			var pts := _curve(port_pos(a), board.pan + Vector2(float(b.x) - 4.0, float(b.y) + float(b.h) * 0.5))
+			var pts := _curve(port_pos(a), board.w2c(Vector2(float(b.x), float(b.y) + float(b.h) * 0.5)) + Vector2(-4, 0))
 			var solid: bool = a.closed
 			for k in pts.size() - 1:
 				if solid or k % 2 == 0:
@@ -361,7 +450,7 @@ class Canvas extends Control:
 			var col2: Color = board.U.color(int(d.ai))
 			var p := port_pos(d)
 			var zr: float = float(d.x) + float(d.w)
-			draw_line(board.pan + Vector2(zr, float(d.y) + float(d.h) * 0.5), p, col2, 3.0)
+			draw_line(board.w2c(Vector2(zr, float(d.y) + float(d.h) * 0.5)), p, col2, 3.0)
 			draw_circle(p, PORT_R, col2 if d.closed else T.BG)
 			draw_arc(p, PORT_R, 0, TAU, 20, col2, 3.0)
 		if board.drag_from != "":
@@ -392,14 +481,14 @@ class Canvas extends Control:
 					var b: Dictionary = board._zone(str(l.to))
 					if a.is_empty() or b.is_empty():
 						continue
-					var pts := _curve(port_pos(a), board.pan + Vector2(float(b.x) - 4.0, float(b.y) + float(b.h) * 0.5))
+					var pts := _curve(port_pos(a), board.w2c(Vector2(float(b.x), float(b.y) + float(b.h) * 0.5)) + Vector2(-4, 0))
 					if pts[14].distance_to(e.position) < 10.0:
 						board.remove_link(i)
 						return
 				panning = true
 			else:
 				if board.drag_from != "":
-					board.add_link(board.drag_from, board.zone_at(e.position - board.pan, board.drag_from))
+					board.add_link(board.drag_from, board.zone_at(board.c2w(e.position), board.drag_from))
 					board.drag_from = ""
 					queue_redraw()
 				if panning:
@@ -428,6 +517,8 @@ class Zone extends PanelContainer:
 	var input_row: HBoxContainer
 	var input: LineEdit
 	var mode := ""
+	var grab := Vector2.ZERO
+	var lod := false
 
 	func build_ui() -> void:
 		position = Vector2(float(d.x), float(d.y))
@@ -549,14 +640,35 @@ class Zone extends PanelContainer:
 			draw_rect(Rect2(size.x - 6 - i * 4, size.y - 6, 2, 2), Color(col, 0.8))
 			draw_rect(Rect2(size.x - 6, size.y - 6 - i * 4, 2, 2), Color(col, 0.8))
 
+	func set_lod(v: bool) -> void:
+		lod = v
+		var vb: Node = title_e.get_parent().get_parent()
+		for c in vb.get_children():
+			if c != title_e.get_parent():
+				c.visible = not v if c != info else (not v and info.text != "")
+		for c in title_e.get_parent().get_children():
+			if c != title_e:
+				c.visible = not v
+		title_e.editable = not v
+		title_e.mouse_filter = Control.MOUSE_FILTER_IGNORE if v else Control.MOUSE_FILTER_STOP
+		title_e.add_theme_font_size_override("font_size", clampi(int(18.0 / maxf(board.zoom, 0.12)), 16, 120) if v else 16)
+		if not v:
+			refresh()
+
 	func _gui_input(e: InputEvent) -> void:
 		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
 			if e.pressed:
 				move_to_front()
-				if e.position.x > size.x - 22 and e.position.y > size.y - 22:
+				if lod and e.double_click:
+					board.focus_zone(str(d.id))
+					return
+				var wm: Vector2 = board.c2w(board.canvas.get_local_mouse_position())
+				if not lod and e.position.x > size.x - 22 and e.position.y > size.y - 22:
 					mode = "resize"
-				elif e.position.y < 40:
+					grab = wm - size
+				elif lod or e.position.y < 40:
 					mode = "drag"
+					grab = wm - position
 				else:
 					mode = ""
 			else:
@@ -564,12 +676,13 @@ class Zone extends PanelContainer:
 					board._touch()
 				mode = ""
 		elif e is InputEventMouseMotion and mode != "":
+			var wm2: Vector2 = board.c2w(board.canvas.get_local_mouse_position())
 			if mode == "drag":
-				position += e.relative
+				position = wm2 - grab
 				d.x = position.x
 				d.y = position.y
 			else:
-				size = (size + e.relative).max(custom_minimum_size)
+				size = (wm2 - grab).max(custom_minimum_size)
 				d.w = size.x
 				d.h = size.y
 			board.canvas.queue_redraw()
