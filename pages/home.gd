@@ -198,7 +198,10 @@ func _render_status() -> void:
 		_status.text = "%d app%s" % [n, "s" if n > 1 else ""]
 	if not cat.online:
 		_orb.anim = "sad" if upd == 0 else "happy"
-		_sub.text = "Hors ligne · vérifié " + ctx.ago(cat.last_check) if cat.last_check > 0.0 else "Hors ligne"
+		if cat.rate_reset > Time.get_unix_time_from_system():
+			_sub.text = "Limite GitHub · réessaie dans %d min" % maxi(1, int(ceil((cat.rate_reset - Time.get_unix_time_from_system()) / 60.0)))
+		else:
+			_sub.text = "Hors ligne · vérifié " + ctx.ago(cat.last_check) if cat.last_check > 0.0 else "Hors ligne"
 		_sub.add_theme_color_override("font_color", T.WARN)
 	elif cat.last_check > 0.0:
 		_sub.text = "Vérifié " + ctx.ago(cat.last_check)

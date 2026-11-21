@@ -96,27 +96,67 @@ func _headers() -> PackedStringArray:
 	return PackedStringArray(["User-Agent: goodview-launcher", "Accept: application/vnd.github+json"])
 
 
-## [code HTTP (0 = échec réseau), octets]
-func get_bytes(url: String, timeout := 15.0) -> Array:
+var rate_reset := 0.0  # horodatage Unix de la remise à zéro de la limite GitHub (0 = inconnue)
+var _etags := {}  # url -> {"etag": ..., "body": ...} : une réponse 304 ne compte pas dans la limite GitHub
+
+
+## [code HTTP (0 = échec réseau), octets, en-têtes]
+func get_bytes(url: String, timeout := 15.0, extra := PackedStringArray()) -> Array:
 	if not net:
-		return [0, PackedByteArray()]
+		return [0, PackedByteArray(), PackedStringArray()]
 	var req := HTTPRequest.new()
 	req.timeout = timeout
 	add_child(req)
-	if req.request(url, _headers()) != OK:
+	if req.request(url, _headers() + extra) != OK:
 		req.queue_free()
-		return [0, PackedByteArray()]
+		return [0, PackedByteArray(), PackedStringArray()]
 	var res: Array = await req.request_completed
 	req.queue_free()
-	return [res[1] if res[0] == HTTPRequest.RESULT_SUCCESS else 0, res[3]]
+	return [res[1] if res[0] == HTTPRequest.RESULT_SUCCESS else 0, res[3], res[2]]
 
 
-## [code, données JSON ou null]
+static func _header(h: PackedStringArray, key: String) -> String:
+	for line in h:
+		if line.to_lower().begins_with(key.to_lower() + ":"):
+			return line.substr(key.length() + 1).strip_edges()
+	return ""
+
+
+func _load_etags() -> void:
+	if _etags.is_empty() and FileAccess.file_exists("user://etags.json"):
+		var d = JSON.parse_string(FileAccess.get_file_as_string("user://etags.json"))
+		if d is Dictionary:
+			_etags = d
+
+
+func _save_etags() -> void:
+	var f := FileAccess.open("user://etags.json", FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(_etags))
+		f.close()
+
+
+## [code, données JSON ou null] ; requêtes conditionnelles (ETag) pour ménager la limite de l'API GitHub.
 func get_json(url: String) -> Array:
-	var r: Array = await get_bytes(url)
+	_load_etags()
+	var extra := PackedStringArray()
+	if _etags.has(url):
+		extra.append("If-None-Match: " + str(_etags[url].etag))
+	var r: Array = await get_bytes(url, 15.0, extra)
+	if r[0] == 304 and _etags.has(url):
+		return [200, JSON.parse_string(str(_etags[url].body))]
+	if r[0] == 403 or r[0] == 429:
+		var rs := _header(r[2], "x-ratelimit-reset")
+		rate_reset = rs.to_float() if rs != "" else Time.get_unix_time_from_system() + 900.0
+		return [r[0], null]
 	if r[0] != 200:
 		return [r[0], null]
-	return [200, JSON.parse_string((r[1] as PackedByteArray).get_string_from_utf8())]
+	var txt: String = (r[1] as PackedByteArray).get_string_from_utf8()
+	var et := _header(r[2], "etag")
+	if et != "" and txt.length() < 200000:
+		_etags[url] = {"etag": et, "body": txt}
+		_save_etags()
+	return [200, JSON.parse_string(txt)]
 
 
 func make_tex(bytes: PackedByteArray, svg := false) -> Texture2D:
@@ -154,7 +194,8 @@ func fetch_release(a: Dictionary) -> bool:
 func _note_failure(code: int) -> void:
 	online = code != 0
 	if code == 403 or code == 429:
-		error_msg = "Limite GitHub atteinte, réessaie dans quelques minutes."
+		var mins := maxi(1, int(ceil((rate_reset - Time.get_unix_time_from_system()) / 60.0)))
+		error_msg = "Limite GitHub atteinte, réessaie dans %d min." % mins
 	elif code == 0:
 		error_msg = "Impossible de joindre GitHub."
 	else:
