@@ -107,7 +107,10 @@ func setup(b: Node) -> void:
 	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	input.text_submitted.connect(ask)
 	input.gui_input.connect(func(e: InputEvent):
-		if e is InputEventKey and e.pressed and e.keycode == KEY_ESCAPE:
+		if e is InputEventKey and e.pressed and (e.keycode == KEY_ENTER or e.keycode == KEY_KP_ENTER) and (e.ctrl_pressed or e.shift_pressed):
+			set_mode("graph" if mode == "chat" else "chat")  # Ctrl/Maj+Entrée : alterne Discuter / Éditer le graphe
+			accept_event()
+		elif e is InputEventKey and e.pressed and e.keycode == KEY_ESCAPE:
 			if busy and req != null:
 				req.cancel()
 			else:

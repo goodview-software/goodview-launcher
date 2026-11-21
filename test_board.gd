@@ -4,6 +4,9 @@ extends RefCounted
 
 const Geom := preload("res://ui/draw/geom.gd")
 const Scene := preload("res://ui/draw/scene.gd")
+const Chat := preload("res://ui/draw/chat.gd")
+const Render := preload("res://ui/draw/render.gd")
+const Surface := preload("res://ui/draw/surface.gd")
 
 var t  # le test_run (check, frames, router)
 var b  # la page Plan
@@ -436,6 +439,12 @@ func run(test, host_page) -> void:
 	sc.select([k1.id, k2.id])
 	t.check(tl.key(kz) and str(k1.group) != "" and k1.group == k2.group, "clavier : Ctrl+G groupe")
 
+	# --- chat en nœuds (arbre de messages)
+	await _chat_tests()
+
+	# --- seuil de lisibilité (vignettes) et joystick
+	await _lod_joystick_tests()
+
 	# --- nettoyage
 	sc.clear()
 	b._clear_nodes()
@@ -451,3 +460,349 @@ func _key(code: int, phys := 0, ctrl := false, shift := false) -> InputEventKey:
 	e.ctrl_pressed = ctrl
 	e.shift_pressed = shift
 	return e
+
+
+func _msgs_overlap(list: Array) -> bool:
+	for i in list.size():
+		for j in range(i + 1, list.size()):
+			if Geom.rect(list[i]).intersects(Geom.rect(list[j])):
+				return true
+	return false
+
+
+func _chat_tests() -> void:
+	sc.clear()
+	b._clear_nodes()
+	sc.reset_history()
+	S.set_view(Vector2.ZERO, 1.0)
+	S.size = Vector2(1000, 700)
+	if b.ctx.models.is_empty():
+		b.ctx.models = [{"name": "llama3.1:8b", "size": 1.0}]
+	t.check(Surface.LOD <= 0.25 and Surface.LOD >= 0.15, "seuil des vignettes abaissé (%.2f)" % Surface.LOD)
+
+	# 1. j'écris : nœud utilisateur + nœud IA enfant qui répond en streaming ; une demande = une étape Ctrl+Z
+	var a1: Dictionary = await b.chat_say("Bonjour, qui es-tu ?", "", 0)
+	var u1: Dictionary = Chat.parent_of(sc, a1)
+	t.check(sc.msgs().size() == 2 and str(u1.role) == "user" and str(a1.role) == "assistant" and a1.parent == u1.id and str(u1.parent) == "", "chat : racine utilisateur + réponse enfant")
+	t.check("Bonjour" in str(a1.text) and bool(a1.done) and not b.chat_busy(str(a1.id)) and str(u1.text) == "Bonjour, qui es-tu ?", "chat : réponse reçue en streaming dans le nœud (%s)" % str(a1.text).left(20))
+	t.check(float(a1.y) >= float(u1.y) + float(u1.h) and absf(float(a1.x) - float(u1.x)) < 1.0, "chat : l'enfant est placé sous son parent")
+	t.check(sc.sel.has(a1.id) and sc.sel.size() == 1, "chat : le nœud de l'IA est sélectionné")
+	t.check(sc.can_undo(), "chat : annulable")
+	tl.undo()
+	t.check(sc.msgs().is_empty(), "chat : UN Ctrl+Z retire la question et la réponse")
+	tl.redo()
+	t.check(sc.msgs().size() == 2 and "Bonjour" in str(sc.get_el(str(a1.id)).text), "chat : Ctrl+Maj+Z les rétablit avec le texte")
+	a1 = sc.get_el(str(a1.id))
+	u1 = sc.get_el(str(u1.id))
+
+	# 2. je réponds depuis le nœud de l'IA ; 3. branche : second message depuis le même nœud
+	var a2: Dictionary = await b.chat_say("Et toi ?", str(a1.id), 0)
+	var u2: Dictionary = Chat.parent_of(sc, a2)
+	var a3: Dictionary = await b.chat_say("Autre piste", str(a1.id), 0)
+	var u3: Dictionary = Chat.parent_of(sc, a3)
+	t.check(u2.parent == a1.id and u3.parent == a1.id and sc.kids(str(a1.id)).size() == 2, "arbre : deux branches depuis le même nœud")
+	t.check(Chat.path(sc, str(a2.id)).size() == 4 and Chat.path(sc, str(a3.id)).size() == 4, "arbre : chemin racine -> nœud (4 nœuds)")
+	t.check(float(u3.x) > float(u2.x) + float(u2.w) - 1.0, "arbre : la branche suivante est à droite de la précédente")
+	t.check(not _msgs_overlap(sc.msgs()), "arbre : aucun nœud ne se chevauche (%d nœuds)" % sc.msgs().size())
+
+	# 4. contexte envoyé au modèle = ancêtres seulement (fonction pure)
+	var h: Array = Chat.history(sc, str(u3.id), "SYS", 0, b._ai_name)
+	var joined := ""
+	for m in h:
+		joined += str(m.content) + "|"
+	t.check(h.size() == 4 and h[0].role == "system" and h[1].role == "user" and h[2].role == "assistant" and h[3].role == "user" and h[3].content == "Autre piste", "historique : système + ancêtres (%d messages)" % h.size())
+	t.check(not ("Et toi" in joined), "historique : la branche voisine n'est pas envoyée")
+	a1["ai"] = 1
+	var h2: Array = Chat.history(sc, str(u3.id), "SYS", 0, b._ai_name)
+	t.check(h2[2].role == "user" and str(h2[2].content).begins_with("[" + b._ai_name(1) + "]"), "historique : l'autre assistant est étiqueté")
+	a1["ai"] = 0
+	var h3: Array = Chat.history(sc, str(a2.id), "SYS", 0, b._ai_name, 2)
+	t.check(h3.size() == 3, "historique : plafonné aux N derniers messages")
+
+	# 5. régénérer = nouveau frère
+	var a4: Dictionary = await b.chat_regen(str(a1.id))
+	t.check(a4.parent == u1.id and sc.kids(str(u1.id)).size() == 2 and "Bonjour" in str(a4.text) and not _msgs_overlap(sc.msgs()), "régénérer : nouvelle réponse frère, sans chevauchement")
+
+	# 6. chemin en relief : ancêtres + descendants gardés, le reste de l'arbre estompé
+	sc.select([a3.id])
+	var fo: Dictionary = Chat.focus(sc)
+	t.check(fo.on and fo.anc.has(u1.id) and fo.anc.has(a1.id) and fo.anc.has(u3.id) and fo.anc.has(a3.id) and not fo.anc.has(u2.id), "mise en évidence : chemin racine -> nœud")
+	t.check(fo.tree.has(a4.id) and not fo.keep.has(a4.id) and fo.keep.has(a3.id), "mise en évidence : le reste de l'arbre est estompé")
+	sc.clear_sel()
+	t.check(not Chat.focus(sc).on, "mise en évidence : rien sélectionné, rien estompé")
+
+	# 7. déplacement à la main d'un nœud
+	var mx: float = u2.x
+	tl.set_tool("select")
+	drag(S.w2c(Geom.center(u2)), S.w2c(Geom.center(u2)) + Vector2(0, 260))
+	t.check(sc.sel.has(u2.id) and float(u2.y) > 100.0 and absf(float(u2.x) - mx) < 30.0, "nœud déplaçable à la main")
+	tl.undo()
+
+	# 8. rangement automatique : on mélange tout, puis on range sans chevauchement, enfants sous leur parent
+	var seed_rng := RandomNumberGenerator.new()
+	seed_rng.seed = 3
+	for m in sc.msgs():
+		m.x = seed_rng.randf_range(0, 300)
+		m.y = seed_rng.randf_range(0, 300)
+		sc.mark(m)
+	var moved: Array = Chat.tidy(sc, str(u1.id))
+	var below := true
+	for m in sc.msgs():
+		var pm: Dictionary = Chat.parent_of(sc, m)
+		if not pm.is_empty() and float(m.y) < float(pm.y) + float(pm.h):
+			below = false
+	t.check(not moved.is_empty() and not _msgs_overlap(sc.msgs()) and below, "rangement : aucun chevauchement, enfants sous leur parent")
+	sc.commit()
+
+	# 9. copier / coller une sous-branche : parent recréé dans la copie
+	var n_before: int = sc.msgs().size()
+	sc.select([a1.id, u3.id, a3.id])
+	tl.copy()
+	tl.paste()
+	var pasted: Array = sc.msgs().filter(func(m): return not [u1.id, a1.id, u2.id, a2.id, u3.id, a3.id, a4.id].has(m.id))
+	t.check(sc.msgs().size() == n_before + 3 and pasted.size() == 3, "copier-coller : 3 nœuds copiés")
+	var roots_p: Array = pasted.filter(func(m): return Chat.parent_of(sc, m).is_empty())
+	t.check(roots_p.size() == 1 and str(roots_p[0].text) == str(a1.text), "copie : le nœud de tête devient une racine, les autres gardent leur parent copié")
+	tl.undo()
+	t.check(sc.msgs().size() == n_before, "coller annulé")
+
+	# 10. suppression : un nœud emporte toute sa sous-branche, un seul Ctrl+Z la rend
+	var total: int = sc.msgs().size()
+	sc.select([a1.id])
+	tl.delete_sel()
+	t.check(not sc.by_id.has(a1.id) and not sc.by_id.has(a3.id) and not sc.by_id.has(u2.id) and sc.by_id.has(u1.id) and sc.by_id.has(a4.id), "suppression : la sous-branche part avec le nœud, le reste demeure")
+	tl.undo()
+	t.check(sc.msgs().size() == total and sc.by_id.has(a3.id) and Chat.parent_of(sc, sc.get_el(str(a3.id))).id == u3.id, "suppression : UN Ctrl+Z rend toute la branche")
+
+	# 11. sauvegarde / rechargement (clé elements, v2)
+	b._save()
+	var texts := {}
+	for m in sc.msgs():
+		texts[m.id] = [str(m.text), str(m.parent), str(m.role)]
+	b._clear_nodes()
+	b._load()
+	var same: bool = sc.msgs().size() == texts.size()
+	for m in sc.msgs():
+		if not texts.has(m.id) or texts[m.id] != [str(m.text), str(m.parent), str(m.role)] or not bool(m.done):
+			same = false
+	var raw = JSON.parse_string(FileAccess.get_file_as_string(b._plan_file()))
+	var in_raw := 0
+	for e in raw.elements:
+		if e.type == "msg":
+			in_raw += 1
+	t.check(same and in_raw == texts.size() and int(raw.v) == 2, "sauvegarde v2 : %d nœuds de chat rechargés à l'identique" % texts.size())
+	u1 = sc.get_el(str(u1.id))
+	a1 = sc.get_el(str(a1.id))
+	a3 = sc.get_el(str(a3.id))
+	u3 = sc.get_el(str(u3.id))
+
+	# 12. recherche et export Markdown (arbre indenté)
+	b._apply_search("autre piste")
+	t.check(sc.search_q == "autre piste" and Chat.matches(u3, sc.search_q) and not Chat.matches(u1, sc.search_q), "recherche : seuls les nœuds correspondants restent nets")
+	sc.clear_sel()
+	b.search_e.text = "autre piste"
+	b._goto_first_match()
+	t.check(sc.sel.has(u3.id), "recherche : Entrée sélectionne le premier nœud trouvé")
+	b._apply_search("")
+	var md: PackedStringArray = Chat.markdown(sc, b._ai_name)
+	var mdt := "\n".join(md)
+	t.check("## Conversations" in mdt and "- **Toi** : Bonjour, qui es-tu ?" in mdt and ("  - **" + b._ai_name(0) + "** :") in mdt and "    - **Toi** : Autre piste" in mdt, "export Markdown : arbre indenté")
+
+	# 13. hauteur du nœud suivant le texte, largeur redimensionnable
+	var lm: Dictionary = Chat.make_msg(sc, "assistant", "court", "", 0)
+	var h_short: float = Chat.layout(sc, lm).h
+	lm.text = "# Titre\n\n- puce un\n- puce deux\n\n```\ncode()\n```\n\n" + "Un long paragraphe de texte qui doit passer à la ligne plusieurs fois. ".repeat(12)
+	sc.cache.erase(lm.id)
+	var lay: Dictionary = Chat.layout(sc, lm)
+	t.check(float(lay.h) > h_short + 120.0 and lay.lines.size() > 10 and lay.boxes.size() >= 1 and float(lm.h) == float(lay.h), "mise en page : Markdown léger, la hauteur suit le texte (%.0f -> %.0f)" % [h_short, lay.h])
+	lm.w = 560.0
+	sc.cache.erase(lm.id)
+	t.check(Chat.layout(sc, lm).h < float(lay.h), "mise en page : plus large = moins haut")
+
+	# 14. rendu (tous les niveaux de zoom, avec chemin en relief et recherche)
+	var dn := [0]
+	S.draw.connect(func(): dn[0] += 1)
+	S.fit_all()
+	for zv in [1.0, 0.5, 0.3, 0.22, 0.12]:
+		S.set_view(Vector2(30, 30), zv)
+		sc.select([a3.id])
+		sc.search_q = "bonjour" if zv < 0.3 else ""
+		await t.frames(2)
+	sc.search_q = ""
+	t.check(dn[0] > 0, "rendu : nœuds de chat dessinés à tous les zooms")
+	S.set_view(Vector2.ZERO, 1.0)
+
+	# 15. barre de saisie : deux modes, cible = nœud sélectionné ; boutons rapides sous le nœud
+	var asst = b.assist
+	t.check(asst.mode == "chat", "barre : Discuter par défaut")
+	sc.select([a3.id])
+	S.sel_changed.emit()
+	await t.frames(2)
+	t.check(asst.target_id() == str(a3.id) and b.chat_bar.visible and Rect2(Vector2.ZERO, S.size).encloses(Rect2(b.chat_bar.position, b.chat_bar.size)), "boutons rapides : visibles sous le nœud sélectionné")
+	t.check(b.chat_bar.b_regen.visible and b.chat_bar.b_fork.visible and b.chat_bar.b_reply.visible and not b.chat_bar.b_stop.visible, "boutons rapides : Répondre, Branche ici, Régénérer")
+	b.chat_reply(str(a3.id), true)
+	t.check(asst.visible and asst.mode == "chat" and asst.fork and asst.target_id() == str(a3.id), "Branche ici : barre ouverte sur ce nœud")
+	asst.set_mode("graph")
+	t.check(asst.mode == "graph" and not asst.who.visible and asst.b_graph.button_pressed, "barre : bascule vers Éditer le graphe")
+	asst.open("chat")
+	t.check(asst.mode == "chat" and asst.who.visible and asst.b_chat.button_pressed and asst.model_l.text != "", "barre : retour à Discuter, sélecteur d'assistant et modèle affichés")
+	var ek := _key(KEY_ENTER, 0, true)
+	asst.input.gui_input.emit(ek)
+	t.check(asst.mode == "graph", "barre : Ctrl+Entrée dans le champ bascule de mode")
+	asst.set_mode("chat")
+	S.get_viewport().gui_release_focus()
+	t.check(tl.key(_key(KEY_ENTER, 0, true)) and asst.mode == "graph", "clavier : Ctrl+Entrée = éditer le graphe")
+	asst.close()
+	t.check(tl.key(_key(KEY_ENTER)) and asst.mode == "chat" and asst.visible, "clavier : Entrée = discuter")
+	var nb: int = sc.msgs().size()
+	sc.clear_sel()
+	asst.who.select(2)
+	await asst.ask("Salut à tous")
+	await t.wait_for(func(): return b.reqs.is_empty())
+	var fresh: Array = sc.msgs().filter(func(m): return str(m.text) == "Salut à tous")
+	t.check(sc.msgs().size() == nb + 2 and fresh.size() == 1 and Chat.parent_of(sc, fresh[0]).is_empty() and int(fresh[0].ai) == 2, "barre : sans sélection, nouvelle conversation (racine) avec l'assistant choisi")
+	var ans: Array = sc.kids(str(fresh[0].id))
+	t.check(ans.size() == 1 and int(ans[0].ai) == 2 and "Bonjour" in str(ans[0].text) and bool(ans[0].done), "barre : l'assistant choisi répond dans un nœud enfant")
+	asst.close()
+	# le graphe ne touche pas aux nœuds de chat
+	const GT := preload("res://ui/draw/graph_tools.gd")
+	GT.run(sc, "supprimer", {"ids": ["tout"]}, Vector2.ZERO, [])
+	var del_res: String = GT.run(sc, "supprimer", {"ids": [str(fresh[0].id)]}, Vector2.ZERO, [])
+	t.check(sc.msgs().size() == nb + 2 and "Refusé" in del_res, "assistant du graphe : les nœuds de chat sont protégés")
+
+	# 16. perf : 300 nœuds de chat
+	sc.clear()
+	b._clear_nodes()
+	sc.reset_history()
+	var prev_id := ""
+	var t0 := Time.get_ticks_usec()
+	for i in 300:
+		var par := "" if i % 6 == 0 else prev_id
+		var nm: Dictionary = Chat.add_msg(sc, "assistant" if i % 2 == 1 else "user", ("Texte de test numéro %d. " % i).repeat(18), par, 0, false, Vector2(i * 7 % 400, 0))
+		prev_id = str(nm.id)
+	var t_add := (Time.get_ticks_usec() - t0) / 1000.0
+	var rs: Array = Chat.roots(sc)
+	for r in rs:
+		Chat.tidy(sc, str(r.id))
+	S.set_view(Vector2.ZERO, 0.3)
+	var t1 := Time.get_ticks_usec()
+	S._part_key = []
+	S.partition()
+	for el in sc.msgs():
+		sc.cache.erase(el.id)
+	for el in S.vis_back:
+		Chat.layout(sc, el)
+	var t_lay := (Time.get_ticks_usec() - t1) / 1000.0
+	var t2 := Time.get_ticks_usec()
+	S._part_key = []
+	S.partition()
+	for el in S.vis_back:
+		Chat.layout(sc, el)
+	var t_warm := (Time.get_ticks_usec() - t2) / 1000.0
+	var nodes_vis: int = S.vis_back.size() + S.vis_front.size()
+	print("PERF 300 nœuds de chat : ajout %.0f ms, mise en page des %d visibles %.0f ms, passe chaude %.1f ms" % [t_add, nodes_vis, t_lay, t_warm])
+	t.check(t_warm < 30.0 and t_lay < 1500.0 and t_add < 6000.0, "perf : 300 nœuds de chat (chaud %.1f ms)" % t_warm)
+	await t.frames(3)
+	sc.clear()
+	b._clear_nodes()
+	sc.reset_history()
+
+
+func _lod_joystick_tests() -> void:
+	sc.clear()
+	b._clear_nodes()
+	sc.reset_history()
+	var z: Dictionary = b._add_zone("note", "Z", Vector2(100, 100))
+	# seuil : les zones restent de vrais nœuds jusqu'à 20 %, vignettes en dessous
+	S.set_view(Vector2.ZERO, 0.34)
+	t.check(not S.lod and S.world.visible, "zoom 34 % : zones en vrai (plus de vignette)")
+	S.set_view(Vector2.ZERO, 0.21)
+	t.check(not S.lod and S.world.visible, "zoom 21 % : zones en vrai")
+	S.set_view(Vector2.ZERO, 0.15)
+	t.check(S.lod and not S.world.visible, "zoom 15 % : vignettes")
+	S.set_view(Vector2.ZERO, 0.3)
+	t.check(not S.lod and S.world.visible, "retour à 30 % : zones revenues")
+	# textes lisibles : jamais tracés sous HIDE_FS, agrandis jusqu'à MIN_FS sinon
+	t.check(Render.MIN_FS >= 6.0 and Render.HIDE_FS < Render.MIN_FS, "textes : taille minimale à l'écran %.0f px" % Render.MIN_FS)
+	var tx: Dictionary = sc.make("text", 400, 100)
+	tx.text = "Lisible"
+	tx.fontSize = 20.0
+	Geom.fit_text(tx)
+	sc.add(tx)
+	for zv in [0.3, 0.2, 0.12]:
+		S.set_view(Vector2.ZERO, zv)
+		await t.frames(1)
+	sc.remove([tx.id])
+	S.set_view(Vector2.ZERO, 1.0)
+
+	# joystick
+	var bars: Control = b.bars
+	var joy: Control = bars.joy
+	await t.frames(2)
+	bars.layout()
+	t.check(joy.visible and joy.size.x >= 64.0 and joy.size.y >= 64.0, "joystick : visible, %.0f px" % joy.size.x)
+	t.check(not Rect2(joy.position, joy.size).intersects(Rect2(bars.zoombar.position, bars.zoombar.size)) and not Rect2(joy.position, joy.size).intersects(Rect2(bars.panel.position, bars.panel.size)), "joystick : ne recouvre ni le zoom ni les propriétés")
+	t.check(Rect2(Vector2.ZERO, S.size).encloses(Rect2(joy.position, joy.size)) and S.block_rect == Rect2(joy.position, joy.size), "joystick : dans le canevas, touchers exclus du pincement")
+	S.set_view(Vector2(100, 100), 1.0)
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = true
+	ev.position = joy.size * 0.5 + Vector2(45, 0)
+	joy._gui_input(ev)
+	t.check(joy.active and joy.vec.x > 0.8 and absf(joy.vec.y) < 0.01, "joystick : appui à droite")
+	for i in 30:
+		joy.step(1.0 / 60.0)
+	var dx: float = 100.0 - S.pan.x
+	t.check(dx > 20.0 and absf(S.pan.y - 100.0) < 0.5, "joystick à droite : la vue défile vers la droite (%.0f px)" % dx)
+	# vitesse proportionnelle à l'écart
+	joy.release()
+	for i in 200:
+		joy.step(1.0 / 60.0)
+	S.set_view(Vector2(100, 100), 1.0)
+	joy.vel = Vector2.ZERO
+	joy.active = true
+	joy.aim(joy.size * 0.5 + Vector2(17, 0))
+	for i in 30:
+		joy.step(1.0 / 60.0)
+	var d_small: float = 100.0 - S.pan.x
+	t.check(d_small > 0.5 and d_small < dx * 0.6, "joystick : vitesse proportionnelle à l'écart (%.0f px < %.0f px)" % [d_small, dx])
+	# haut / bas
+	joy.release()
+	for i in 200:
+		joy.step(1.0 / 60.0)
+	S.set_view(Vector2(100, 100), 1.0)
+	joy.active = true
+	joy.aim(joy.size * 0.5 + Vector2(0, -45))
+	for i in 30:
+		joy.step(1.0 / 60.0)
+	t.check(S.pan.y > 120.0 and absf(S.pan.x - 100.0) < 0.5, "joystick vers le haut : la vue monte")
+	# relâchement : inertie douce puis retour au centre, arrêt du traitement
+	var ev2 := InputEventMouseButton.new()
+	ev2.button_index = MOUSE_BUTTON_LEFT
+	ev2.pressed = false
+	joy._idx = -1
+	joy._gui_input(ev2)
+	t.check(not joy.active and joy.vec == Vector2.ZERO and joy.vel.length() > 1.0, "joystick : relâché, il reste de l'inertie")
+	var pan_rel: Vector2 = S.pan
+	for i in 3:
+		joy.step(1.0 / 60.0)
+	t.check(S.pan.y > pan_rel.y, "joystick : l'inertie continue un instant")
+	for i in 240:
+		joy.step(1.0 / 60.0)
+	t.check(joy.vel == Vector2.ZERO and joy.knob == Vector2.ZERO and not joy.is_processing(), "joystick : revenu au centre, plus de traitement")
+	# le canevas reste utilisable : molette et glisser
+	var p0: Vector2 = S.pan
+	var we := InputEventMouseButton.new()
+	we.button_index = MOUSE_BUTTON_WHEEL_DOWN
+	we.pressed = true
+	t.check(S.wheel(we) and S.pan.y < p0.y, "canevas : la molette défile toujours")
+	var tev := InputEventScreenTouch.new()
+	tev.index = 0
+	tev.pressed = true
+	tev.position = S.get_global_rect().position + joy.position + Vector2(10, 10)
+	S.touch_event(tev)
+	t.check(S._touches.is_empty(), "tactile : un doigt sur le joystick ne compte pas pour le pincement")
+	S.set_view(Vector2.ZERO, 1.0)
+	sc.clear()
+	b._clear_nodes()
+	sc.reset_history()
