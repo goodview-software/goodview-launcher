@@ -227,30 +227,59 @@ class CardView extends PanelContainer:
 
 ## Scène FIXE de l'assistant : salle cryogénique pixel art. Au repos l'assistant dort, figé dans sa capsule givrée (inanimé) ; quand il travaille, la capsule se réchauffe et il se réveille. Les autres assistants restent congelés dans les capsules voisines.
 class Stage extends Control:
-	var ai := 0
+	signal picked(i: int)
+	const AWAKE_SECS := 14.0  # sans activité, l'assistant se rendort tout seul
+	var ai := 0:
+		set(v):
+			if v != ai:
+				ai = v
+				idle_t = 0.0
 	var mode := "idle":
 		set(v):
 			if v != mode:
 				mode = v
 				t = 0.0
+				idle_t = 0.0
 	var speed := 1.0
 	var t := 0.0
-	var wake := 0.0  # 0 = congelé, 1 = réveillé
+	var wakes: Array = []  # réveil (0..1) de chaque capsule
+	var idle_t := 99.0
 	var clock := 0.0
 	var motto := ""
+	var rects: Array = []  # zone cliquable de chaque capsule
 
 	func _init(a := 0) -> void:
 		ai = a
+		idle_t = 99.0
 		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		custom_minimum_size = Vector2(0, 236)
-		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		mouse_filter = Control.MOUSE_FILTER_STOP
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		clip_contents = true
+		for j in U.count():
+			wakes.append(0.0)
+
+	## Réveille l'assistant courant (clic).
+	func poke() -> void:
+		idle_t = 0.0
+
+	func _gui_input(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+			for j in rects.size():
+				if (rects[j] as Rect2).has_point(e.position):
+					poke()
+					picked.emit(j)
+					return
 
 	func _process(d: float) -> void:
 		var a := U.anim_for(mode)
 		clock += d
+		if mode == "idle":
+			idle_t += d
 		t += d * float(W.Orb.FPS.get(a, 3.0)) * speed * float(U.get_u(ai).anim.speed)
-		wake = move_toward(wake, 0.0 if mode == "idle" else 1.0, d * 1.2)
+		for j in wakes.size():
+			var target := 1.0 if (j == ai and (mode != "idle" or idle_t < AWAKE_SECS)) else 0.0
+			wakes[j] = move_toward(float(wakes[j]), target, d * 1.2)
 		queue_redraw()
 
 	func _sprite(i: int, a: String, f: int, r: Rect2, mod: Color) -> void:
@@ -331,47 +360,50 @@ class Stage extends Control:
 				draw_rect(Rect2(gx + 4 + j * pw * 0.3, fl - 2 - vp * 14, 10, 4), Color(0.85, 0.95, 1.0, 0.25 * (1.0 - vp) * (1.0 - k * 2.0)))
 
 	func _draw() -> void:
-		var col := U.color(i_main())
+		var col := U.color(ai)
 		var w := size.x
 		var h := size.y
 		var fl := h - 18.0
-		# mur du fond : panneaux métal
-		draw_rect(Rect2(0, 0, w, h), T.BG.darkened(0.3))
-		for j in 8:
-			draw_rect(Rect2(floorf(j * w / 8.0), 0, 2, fl), Color(1, 1, 1, 0.035))
-		draw_rect(Rect2(0, floorf(fl * 0.28), w, 2), Color(1, 1, 1, 0.04))
-		# sol quadrillé
-		draw_rect(Rect2(0, fl, w, h - fl), Color("141a23"))
-		draw_rect(Rect2(0, fl, w, 2), Color(0.5, 0.8, 1.0, 0.18 + 0.3 * wake))
+		var wk: float = float(wakes[ai]) if ai < wakes.size() else 0.0
+		draw_rect(Rect2(0, 0, w, h), Color("07090d"))
+		for j in 10:
+			draw_rect(Rect2(floorf(j * w / 10.0), 0, 2, fl), Color(1, 1, 1, 0.025))
+		draw_rect(Rect2(0, floorf(fl * 0.22), w, 2), Color(1, 1, 1, 0.035))
+		draw_rect(Rect2(0, fl, w, h - fl), Color("0c1017"))
+		draw_rect(Rect2(0, fl, w, 2), Color(0.4, 0.7, 1.0, 0.12 + 0.3 * wk))
 		for j in int(w / 24.0) + 1:
-			draw_rect(Rect2(j * 24.0, fl + 2, 2, h - fl), Color(1, 1, 1, 0.04))
-		# lumière d'ambiance : bleue glacée au repos, couleur de l'assistant éveillé
-		var amb := Color(0.5, 0.75, 1.0).lerp(col, wake)
-		draw_rect(Rect2(0, 0, w, fl), Color(amb, 0.05 + 0.05 * wake))
-		var cx := floorf(w * 0.5)
-		# capsules voisines : les autres assistants, congelés
-		var others: Array = []
-		for j in U.ALL.size():
-			if j != ai:
-				others.append(j)
-		var slots := [-1, 1, -2, 2]
-		for si in slots.size():
-			var o: int = slots[si]
-			var x := cx + signf(float(o)) * (150.0 + (absf(o) - 1.0) * 96.0)
-			if x - 48 < 0 or x + 48 > w or si >= others.size():
-				continue
-			_pod(x, fl, 72, 142, others[si], 0.0, false)
-		# capsule principale
-		_pod(cx, fl, 116, 204, ai, wake, true)
-		# étiquette (écran à côté de la capsule)
+			draw_rect(Rect2(j * 24.0, fl + 2, 2, h - fl), Color(1, 1, 1, 0.03))
+		var amb := Color(0.4, 0.65, 1.0).lerp(col, wk)
+		draw_rect(Rect2(0, 0, w, fl), Color(amb, 0.03 + 0.05 * wk))
+		if wk < 0.3:
+			var pulse := maxf(0.0, sin(clock * 1.6))
+			draw_rect(Rect2(0, 0, w, 4), Color(0.9, 0.15, 0.1, 0.12 + 0.35 * pulse))
+		# capsules : toutes visibles, même taille ; le Général (0) est plus grand
+		rects.clear()
+		var n := U.count()
+		var gap := 6.0
+		var u := minf((w - 12.0 - (n - 1) * gap) / (n - 1 + 1.6), 84.0)
+		var x := floorf((w - (u * (n - 1 + 1.6) + (n - 1) * gap)) * 0.5)
+		for j in n:
+			var pw := u * (1.6 if j == 0 else 1.0)
+			var ph := minf(204.0, pw * 1.65) if j == 0 else minf(150.0, pw * 1.8)
+			ph = minf(ph, fl - 24.0)
+			var k: float = float(wakes[j])
+			_pod(x + pw * 0.5, fl, pw - 12.0, ph, j, k, j == ai)
+			rects.append(Rect2(x - 6.0, fl - ph, pw, ph))
+			if j == ai:
+				draw_rect(Rect2(x - 6.0, fl - ph - 3.0, pw, 2), Color(col, 0.35 + 0.65 * k))
+			x += pw + gap
+		for j in 6:
+			var a2 := 0.14 - j * 0.022
+			draw_rect(Rect2(j * 6.0, 0, 6.0, h), Color(0, 0, 0, a2))
+			draw_rect(Rect2(w - (j + 1) * 6.0, 0, 6.0, h), Color(0, 0, 0, a2))
+		var cl := fposmod(clock, 9.0)
+		if cl < 0.1 or (cl > 0.22 and cl < 0.27):
+			draw_rect(Rect2(0, 0, w, h), Color(0, 0, 0, 0.35))
 		var font := get_theme_default_font()
-		var nm: String = str(U.get_u(ai).name).to_upper()
-		var lx := cx + 82
-		if lx + 60 < w:
-			var st := "SOMMEIL CRYO" if wake < 0.5 else "ÉVEILLÉ"
-			draw_string(font, Vector2(lx, fl - 120), nm, HORIZONTAL_ALIGNMENT_LEFT, w - lx - 6, 18, Color(0.7, 0.88, 1.0).lerp(col, wake))
-			draw_string(font, Vector2(lx, fl - 102), str(U.get_u(ai).specialty), HORIZONTAL_ALIGNMENT_LEFT, w - lx - 6, 12, T.DIM)
-			draw_string(font, Vector2(lx, fl - 86), st, HORIZONTAL_ALIGNMENT_LEFT, w - lx - 6, 11, Color("e0483c").lerp(Color("4de1b4"), wake))
+		var st := "SOMMEIL CRYO" if wk < 0.5 else "ÉVEILLÉ"
+		draw_string(font, Vector2(10, 18), str(U.get_u(ai).name).to_upper() + "  ·  " + st, HORIZONTAL_ALIGNMENT_LEFT, w - 20, 13, Color(0.7, 0.88, 1.0).lerp(col, wk))
 
 	func i_main() -> int:
 		return ai

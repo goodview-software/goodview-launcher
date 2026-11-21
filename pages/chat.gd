@@ -97,6 +97,7 @@ func build() -> void:
 	_outer.add_child(sc)
 	_outer.move_child(sc, 2)
 	stage = ChatUI.Stage.new(int(chat.assistant))
+	stage.picked.connect(switch_assistant)
 	sc.add_child(stage)
 	_chrome.append(sc)
 	# messages
