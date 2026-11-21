@@ -246,13 +246,14 @@ class Stage extends Control:
 	var idle_t := 99.0
 	var clock := 0.0
 	var motto := ""
-	var rects: Array = []  # zone cliquable de chaque capsule
+	var rects: Array = []  # zones cliquables (bocaux + compartiments)
+	var rect_ids: Array = []  # assistant correspondant à chaque zone
 
 	func _init(a := 0) -> void:
 		ai = a
 		idle_t = 99.0
 		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		custom_minimum_size = Vector2(0, 236)
+		custom_minimum_size = Vector2(0, 290)
 		mouse_filter = Control.MOUSE_FILTER_STOP
 		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		clip_contents = true
@@ -268,7 +269,7 @@ class Stage extends Control:
 			for j in rects.size():
 				if (rects[j] as Rect2).has_point(e.position):
 					poke()
-					picked.emit(j)
+					picked.emit(int(rect_ids[j]))
 					return
 
 	func _process(d: float) -> void:
@@ -363,37 +364,102 @@ class Stage extends Control:
 		var col := U.color(ai)
 		var w := size.x
 		var h := size.y
-		var fl := h - 18.0
+		var fl := h - 46.0  # dessus du bureau
 		var wk: float = float(wakes[ai]) if ai < wakes.size() else 0.0
-		draw_rect(Rect2(0, 0, w, h), Color("07090d"))
-		for j in 10:
-			draw_rect(Rect2(floorf(j * w / 10.0), 0, 2, fl), Color(1, 1, 1, 0.025))
-		draw_rect(Rect2(0, floorf(fl * 0.22), w, 2), Color(1, 1, 1, 0.035))
-		draw_rect(Rect2(0, fl, w, h - fl), Color("0c1017"))
-		draw_rect(Rect2(0, fl, w, 2), Color(0.4, 0.7, 1.0, 0.12 + 0.3 * wk))
-		for j in int(w / 24.0) + 1:
-			draw_rect(Rect2(j * 24.0, fl + 2, 2, h - fl), Color(1, 1, 1, 0.03))
-		var amb := Color(0.4, 0.65, 1.0).lerp(col, wk)
-		draw_rect(Rect2(0, 0, w, fl), Color(amb, 0.03 + 0.05 * wk))
-		if wk < 0.3:
-			var pulse := maxf(0.0, sin(clock * 1.6))
-			draw_rect(Rect2(0, 0, w, 4), Color(0.9, 0.15, 0.1, 0.12 + 0.35 * pulse))
-		# capsules : toutes visibles, même taille ; le Général (0) est plus grand
-		rects.clear()
 		var n := U.count()
+		# placement des bocaux sur le bureau (le Général est plus grand)
 		var gap := 6.0
 		var u := minf((w - 12.0 - (n - 1) * gap) / (n - 1 + 1.6), 84.0)
 		var x := floorf((w - (u * (n - 1 + 1.6) + (n - 1) * gap)) * 0.5)
+		var xs: Array = []
+		var pws: Array = []
 		for j in n:
 			var pw := u * (1.6 if j == 0 else 1.0)
-			var ph := minf(204.0, pw * 1.65) if j == 0 else minf(150.0, pw * 1.8)
+			xs.append(x)
+			pws.append(pw)
+			x += pw + gap
+		# mur du fond
+		draw_rect(Rect2(0, 0, w, h), Color("0a0d12"))
+		for j in 12:
+			draw_rect(Rect2(floorf(j * w / 12.0), 0, 2, h), Color(1, 1, 1, 0.02))
+		# ARMOIRE ÉLECTRIQUE (fond) : les assistants y dorment, un par compartiment
+		var cab := Rect2(6, 22, w - 12, fl - 22)
+		draw_rect(cab, Color("252c36"))
+		draw_rect(Rect2(cab.position.x, cab.position.y, cab.size.x, 3), Color("3c4655"))
+		draw_rect(Rect2(cab.position.x, cab.end.y - 3, cab.size.x, 3), Color("14181f"))
+		draw_rect(Rect2(cab.position.x, cab.position.y, 3, cab.size.y), Color("14181f"))
+		draw_rect(Rect2(cab.end.x - 3, cab.position.y, 3, cab.size.y), Color("14181f"))
+		# bande de danger + disjoncteurs en haut
+		for k in int(cab.size.x / 12.0):
+			draw_rect(Rect2(cab.position.x + 4 + k * 12.0, cab.position.y + 5, 6, 4), Color("c9a227") if k % 2 == 0 else Color("14181f"))
+		for k in int((cab.size.x - 20) / 14.0):
+			var on := (k * 7 + int(clock * 0.4)) % 5 != 0
+			draw_rect(Rect2(cab.position.x + 8 + k * 14.0, cab.position.y + 12, 8, 10), Color("0f1319"))
+			draw_rect(Rect2(cab.position.x + 10 + k * 14.0, cab.position.y + (14 if on else 18), 4, 4), Color("8892a0"))
+		var sy := cab.position.y + 28.0
+		var sh := maxf(minf(fl - 112.0 - sy, 78.0), 40.0)
+		rects.clear()
+		rect_ids.clear()
+		for j in n:
+			var sx: float = float(xs[j]) - 4.0
+			var sw: float = float(pws[j]) - 4.0
+			var cc := U.color(j)
+			var act := (j == ai and wk > 0.5)
+			draw_rect(Rect2(sx, sy, sw, sh), Color("0a0e14"))
+			draw_rect(Rect2(sx, sy, sw, 2), Color("0f1319"))
+			draw_rect(Rect2(sx + 2, sy + 2, sw - 4, sh - 4), Color(cc, 0.05 + (0.12 if act else 0.0)))
+			# l'assistant dort dans son compartiment (gris-bleu, immobile) ; éveillé : en couleur
+			var spx := floorf(minf(sw - 8.0, sh - 14.0) / 4.0) * 4.0
+			if spx >= 16.0:
+				var sp := Vector2(floorf(sx + (sw - spx) * 0.5), floorf(sy + sh - spx - 6.0))
+				var md := Color(0.5, 0.62, 0.8, 0.8).lerp(Color.WHITE, float(wakes[j]))
+				_sprite(j, "idle", int(t) % 4 if (j == ai and wk > 0.5) else 0, Rect2(sp, Vector2(spx, spx)), md)
+			# voyant sous le compartiment
+			var led := Color("e0483c") if not act else Color("4de1b4")
+			var bl := 1.0 if act else (0.35 + 0.65 * maxf(0.0, sin(clock * 1.2 + j * 0.9)))
+			draw_rect(Rect2(sx + sw * 0.5 - 3, sy + sh + 4, 6, 4), Color(led, bl))
+			# câbles
+			var cx2 := sx + sw * 0.5
+			for ky in range(int(sy + sh + 10), int(fl) - 4, 4):
+				draw_rect(Rect2(cx2 - 1 + (2 if (ky / 4) % 2 == 0 else 0), ky, 2, 4), Color("0f1319"))
+			if (j == ai and wk > 0.5) and fposmod(clock * 3.0 + j, 1.0) < 0.15:
+				draw_rect(Rect2(cx2 - 3, sy - 2, 6, 3), Color(col, 0.9))  # étincelle
+			rects.append(Rect2(sx, sy, sw, sh + 12.0))
+			rect_ids.append(j)
+		# BUREAU : plateau, tranche, tiroirs
+		draw_rect(Rect2(0, fl, w, 10), Color("7a5636"))
+		draw_rect(Rect2(0, fl, w, 3), Color("9a7048"))
+		for g in int(w / 40.0):
+			draw_rect(Rect2(g * 40.0 + 10, fl + 6, 18, 2), Color("634529"))
+		draw_rect(Rect2(0, fl + 10, w, h - fl - 10), Color("4a3220"))
+		draw_rect(Rect2(0, fl + 10, w, 4), Color("2e1f13"))
+		var dw := minf(150.0, w * 0.3)
+		for dx in [w * 0.12, w * 0.62]:
+			draw_rect(Rect2(dx, fl + 20, dw, h - fl - 28), Color("5a4029"))
+			draw_rect(Rect2(dx, fl + 20, dw, 2), Color("74522f"))
+			draw_rect(Rect2(dx + dw * 0.5 - 10, fl + 28, 20, 4), Color("c9a227"))
+		# post-it
+		draw_rect(Rect2(w * 0.42, fl + 22, 40, 22), Color("f5d94a"))
+		draw_string(get_theme_default_font(), Vector2(w * 0.42 + 3, fl + 33), "NE PAS", HORIZONTAL_ALIGNMENT_LEFT, 40, 8, Color("5a4a10"))
+		draw_string(get_theme_default_font(), Vector2(w * 0.42 + 3, fl + 41), "REVEILLER", HORIZONTAL_ALIGNMENT_LEFT, 40, 8, Color("5a4a10"))
+		# ombres des bocaux sur le plateau
+		for j in n:
+			draw_rect(Rect2(float(xs[j]) - 8.0, fl - 2.0, float(pws[j]) + 4.0, 4), Color(0, 0, 0, 0.35))
+		# bocaux (capsules) posés sur le bureau
+		for j in n:
+			var pw: float = float(pws[j])
+			var ph := minf(150.0, pw * 1.65) if j == 0 else minf(112.0, pw * 1.7)
 			ph = minf(ph, fl - 24.0)
 			var k: float = float(wakes[j])
-			_pod(x + pw * 0.5, fl, pw - 12.0, ph, j, k, j == ai)
-			rects.append(Rect2(x - 6.0, fl - ph, pw, ph))
+			_pod(float(xs[j]) + pw * 0.5, fl, pw - 12.0, ph, j, k, j == ai)
+			rects.append(Rect2(float(xs[j]) - 6.0, fl - ph, pw, ph))
+			rect_ids.append(j)
 			if j == ai:
-				draw_rect(Rect2(x - 6.0, fl - ph - 3.0, pw, 2), Color(col, 0.35 + 0.65 * k))
-			x += pw + gap
+				draw_rect(Rect2(float(xs[j]) - 6.0, fl - ph - 3.0, pw, 2), Color(col, 0.35 + 0.65 * k))
+		# ambiance : gyrophare rouge quand tout dort, vignette, scintillement
+		if wk < 0.3:
+			var pulse := maxf(0.0, sin(clock * 1.6))
+			draw_rect(Rect2(0, 0, w, 4), Color(0.9, 0.15, 0.1, 0.12 + 0.35 * pulse))
 		for j in 6:
 			var a2 := 0.14 - j * 0.022
 			draw_rect(Rect2(j * 6.0, 0, 6.0, h), Color(0, 0, 0, a2))
@@ -403,7 +469,7 @@ class Stage extends Control:
 			draw_rect(Rect2(0, 0, w, h), Color(0, 0, 0, 0.35))
 		var font := get_theme_default_font()
 		var st := "SOMMEIL CRYO" if wk < 0.5 else "ÉVEILLÉ"
-		draw_string(font, Vector2(10, 18), str(U.get_u(ai).name).to_upper() + "  ·  " + st, HORIZONTAL_ALIGNMENT_LEFT, w - 20, 13, Color(0.7, 0.88, 1.0).lerp(col, wk))
+		draw_string(font, Vector2(10, 17), str(U.get_u(ai).name).to_upper() + "  ·  " + st, HORIZONTAL_ALIGNMENT_LEFT, w - 20, 13, Color(0.7, 0.88, 1.0).lerp(col, wk))
 
 	func i_main() -> int:
 		return ai

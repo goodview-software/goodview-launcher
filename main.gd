@@ -34,7 +34,7 @@ func _ready() -> void:
 	add_child(router)
 	router.page_changed.connect(_on_page)
 	_restore_window()
-	router.push(ctx.start_page() if ctx.store.welcomed else "welcome")
+	router.push(("board" if ctx.start_page() == "chat" else ctx.start_page()) if ctx.store.welcomed else "welcome")
 	ctx.start()
 	Pixelize.install(self)
 	if OS.get_environment("GL_PAGE") != "":  # débogage : ouvre directement une page d'onglet

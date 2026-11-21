@@ -18,7 +18,7 @@ func build() -> void:
 	var c0 := W.card(body)
 	W.label("Assistants", 18, T.TEXT, c0)
 	var r0 := W.setting_row(c0, "Page de démarrage", "")
-	var sg := W.Seg.new([["chat", "Chat"], ["home", "Apps"]], ctx.start_page())
+	var sg := W.Seg.new([["chat", "Assistant IA"], ["home", "Apps"]], ctx.start_page())
 	sg.custom_minimum_size = Vector2(190, 38)
 	sg.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	sg.changed.connect(func(id: String): ctx.store.set_s("ui", "start", id))

@@ -296,29 +296,57 @@ func _render_list() -> void:
 		g2.add_child(_card(a))
 
 
-## Sous-app intégrée « Assistant IA » : carte toujours présente en tête de la grille (ouvre la page de chat).
+## Autocollant (image fixe, non animée) + second autocollant avec le nom en dessous.
+class Sticker extends Control:
+	var variant := 0
+	var label := ""
+
+	func _init(v := 0, nm := "") -> void:
+		variant = v
+		label = nm
+		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		custom_minimum_size = Vector2(0, 124)
+
+	func _sticker(rect: Rect2, rot: float, fill: Color) -> void:
+		var c := rect.get_center()
+		draw_set_transform(c, rot, Vector2.ONE)
+		var r := Rect2(-rect.size * 0.5, rect.size)
+		draw_rect(Rect2(r.position + Vector2(3, 4), r.size), Color(0, 0, 0, 0.4))
+		draw_rect(r.grow(3), Color("f4f1e8"))
+		draw_rect(r, fill)
+
+	func _draw() -> void:
+		var col: Color = U.color(variant)
+		var cx := floorf(size.x * 0.5)
+		var pic := Rect2(cx - 40, 6, 80, 80)
+		_sticker(pic, -0.06, T.BG.lerp(col, 0.35))
+		var c := pic.get_center()
+		draw_set_transform(c, -0.06, Vector2.ONE)
+		var row: int = W.Orb.ANIMS["idle"][0] + variant * 5
+		draw_texture_rect_region(W.Orb.SHEET, Rect2(-32, -32, 64, 64), Rect2(0, row * 32, 32, 32))
+		var nm := Rect2(cx - 46, 96, 92, 20)
+		_sticker(nm, 0.04, Color("f4f1e8"))
+		draw_set_transform(nm.get_center(), 0.04, Vector2.ONE)
+		var font := get_theme_default_font()
+		draw_string(font, Vector2(-44, 4), label.to_upper(), HORIZONTAL_ALIGNMENT_CENTER, 88, 12, Color("1a1d24"))
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+
+## Sous-apps intégrées : Assistant IA (plan 2D de zones) et Chat rapide (conversation classique).
 func _assistant_grid() -> Control:
 	var g: Container = K.Grid.new()
 	g.min_card_width = 220
 	g.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var u: Dictionary = U.get_u(ctx.active)
-	var orb := W.Orb.new()
-	orb.variant = ctx.active
-	orb.anim = "idle"
-	orb.set_process(true)
 	var c := AppCard.new()
 	c.btn_text = "Ouvrir"
-	c.setup(orb, "Assistant IA", "%s et 7 autres assistants locaux (Ollama)." % u.name, ["Intégré", T.OK], false, false)
-	c.pressed.connect(func(): router.go_tab("chat"))
+	c.setup(Sticker.new(ctx.active, "Assistant IA"), "", "Un plan 2D : des zones pour discuter avec l'IA, reliées par des fils.", ["Intégré", T.OK], false, false)
+	c.pressed.connect(func(): router.push("board"))
 	g.add_child(c)
-	var orb2 := W.Orb.new()
-	orb2.variant = (ctx.active + 3) % U.count()
-	orb2.anim = "idle"
-	orb2.set_process(true)
 	var c2 := AppCard.new()
 	c2.btn_text = "Ouvrir"
-	c2.setup(orb2, "Plan IA", "Un plan 2D : des zones où l'on discute avec l'IA, reliées par des fils.", ["Intégré", T.OK], false, false)
-	c2.pressed.connect(func(): router.push("board"))
+	c2.setup(Sticker.new((ctx.active + 3) % U.count(), "Chat rapide"), "", "Une conversation directe avec %s et 7 autres assistants locaux." % U.get_u(ctx.active).name, ["Intégré", T.OK], false, false)
+	c2.pressed.connect(func(): router.go_tab("chat"))
 	g.add_child(c2)
 	return g
 

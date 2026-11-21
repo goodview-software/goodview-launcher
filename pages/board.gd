@@ -38,6 +38,11 @@ func build() -> void:
 	add.size_name = "sm"
 	add.pressed.connect(func(): _add_zone())
 	head_right.add_child(add)
+	var qc := W.Btn.new("Chat", "ghost")
+	qc.size_name = "sm"
+	qc.tooltip_text = "Chat rapide (conversation classique)"
+	qc.pressed.connect(func(): router.go_tab("chat"))
+	head_right.add_child(qc)
 	scroll.visible = false
 	canvas = Canvas.new()
 	canvas.board = self
