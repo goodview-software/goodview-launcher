@@ -5,6 +5,9 @@ extends Control
 const ORGS := ["goodview-software"]
 const API := "https://api.github.com"
 const APPS_DIR := "user://apps"
+const VERSION: String = preload("res://version.gd").VERSION
+const UPDATE_URL := "https://github.com/goodview-software/goodview-launcher/releases/latest/download/version.json"
+const RELEASES_URL := "https://github.com/goodview-software/goodview-launcher/releases/latest"
 const STATE_FILE := "user://installed.json"
 const CFG_FILE := "user://settings.cfg"
 const EXCLUDED := [".github", "goodview-launcher"]  # repos non listés
@@ -16,11 +19,16 @@ var status: Label
 var progress: ProgressBar
 var token_edit: LineEdit
 var busy := false
+var upd_lbl: Label
+var upd_btn: Button
+var upd_info := {}
+var upd_http: HTTPRequest
 
 func _ready() -> void:
 	_load_state()
 	_build_ui()
 	refresh()
+	_check_update()
 
 # ---------- UI ----------
 func _build_ui() -> void:
@@ -37,10 +45,20 @@ func _build_ui() -> void:
 	root.add_theme_constant_override("separation", 12)
 	margin.add_child(root)
 
+	var th := HBoxContainer.new()
+	root.add_child(th)
 	var title := Label.new()
 	title.text = "Goodview Software"
 	title.add_theme_font_size_override("font_size", 30)
-	root.add_child(title)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	th.add_child(title)
+	upd_lbl = Label.new()
+	upd_lbl.modulate = Color(1, 1, 1, 0.7)
+	th.add_child(upd_lbl)
+	upd_btn = Button.new()
+	upd_btn.visible = false
+	upd_btn.pressed.connect(_do_update)
+	th.add_child(upd_btn)
 
 	var bar := HBoxContainer.new()
 	root.add_child(bar)
@@ -297,3 +315,63 @@ func _save_state() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("github", "token", token)
 	cfg.save(CFG_FILE)
+
+
+# ---------- Mise à jour du launcher (même principe que Sound Link : version.json + .pck) ----------
+func _check_update() -> void:
+	upd_lbl.text = "v" + VERSION
+	upd_http = HTTPRequest.new()
+	upd_http.timeout = 10.0
+	add_child(upd_http)
+	upd_http.request_completed.connect(_on_version_json, CONNECT_ONE_SHOT)
+	upd_http.request(UPDATE_URL)
+
+func _on_version_json(result: int, code: int, _h: PackedStringArray, body: PackedByteArray) -> void:
+	if result != HTTPRequest.RESULT_SUCCESS or code != 200:
+		return
+	var info = JSON.parse_string(body.get_string_from_utf8())
+	if not (info is Dictionary) or not info.has("version"):
+		return
+	if not preload("res://boot.gd").newer(str(info["version"]), VERSION):
+		upd_lbl.text = "✓ v" + VERSION
+		return
+	upd_info = info
+	var v := Engine.get_version_info()
+	var same: bool = str(info.get("godot", "")) == "%d.%d.%d" % [v.major, v.minor, v.patch]
+	upd_btn.visible = true
+	if same and info.has("pck"):
+		upd_lbl.text = "v%s disponible" % info["version"]
+		upd_btn.text = "Mettre à jour"
+	else:
+		upd_lbl.text = "v%s disponible (nouveau programme)" % info["version"]
+		upd_btn.text = "Télécharger"
+
+func _do_update() -> void:
+	if upd_btn.text == "Télécharger":
+		OS.shell_open(RELEASES_URL)
+		return
+	if upd_btn.text == "Redémarrer":
+		OS.set_restart_on_exit(true)
+		get_tree().quit()
+		return
+	upd_btn.disabled = true
+	upd_lbl.text = "Téléchargement…"
+	upd_http.download_file = "user://update.tmp"
+	upd_http.request_completed.connect(_on_pck, CONNECT_ONE_SHOT)
+	upd_http.request(str(upd_info["pck"]))
+
+func _on_pck(result: int, code: int, _h: PackedStringArray, _b: PackedByteArray) -> void:
+	upd_http.download_file = ""
+	upd_btn.disabled = false
+	var tmp := "user://update.tmp"
+	if result != HTTPRequest.RESULT_SUCCESS or code != 200 \
+			or FileAccess.get_sha256(tmp) != str(upd_info.get("sha256", "")):
+		DirAccess.remove_absolute(tmp)
+		upd_lbl.text = "Échec du téléchargement"
+		return
+	DirAccess.rename_absolute(tmp, "user://update.pck")
+	var c := ConfigFile.new()
+	c.set_value("update", "version", str(upd_info["version"]))
+	c.save("user://update.cfg")
+	upd_lbl.text = "v%s installée" % upd_info["version"]
+	upd_btn.text = "Redémarrer"
