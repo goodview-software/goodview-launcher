@@ -70,6 +70,9 @@ var plan_id := ""
 var frames: Array = []  # cadres {id,x,y,w,h,title,color}
 var fnodes := {}
 var search_e: LineEdit
+var help_btn: Button
+var help_panel: PanelContainer
+var help_txt: RichTextLabel
 var sketch  # couche de dessin (ui/sketch.gd)
 var _rename: ConfirmationDialog
 var _rename_e: LineEdit
@@ -145,6 +148,40 @@ func build() -> void:
 	canvas.add_child(search_e)
 	sketch = Sketch.new(self)
 	sketch.attach(canvas, world)
+	help_btn = Button.new()
+	help_btn.text = "?"
+	help_btn.tooltip_text = "Aide : comment marchent les fils (nourrit, critique, compare, fusionne)"
+	help_btn.custom_minimum_size = Vector2(44, 44)
+	help_btn.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	help_btn.offset_left = -54
+	help_btn.offset_right = -10
+	help_btn.offset_top = 10
+	help_btn.offset_bottom = 54
+	help_btn.pressed.connect(func():
+		help_panel.visible = not help_panel.visible
+		if help_panel.visible:
+			_fill_help())
+	canvas.add_child(help_btn)
+	help_panel = PanelContainer.new()
+	help_panel.visible = false
+	help_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	help_panel.offset_left = -390
+	help_panel.offset_right = -10
+	help_panel.offset_top = 60
+	help_panel.offset_bottom = 460
+	help_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	var hs := StyleBoxFlat.new()
+	hs.bg_color = T.CARD
+	hs.border_color = T.OK
+	hs.set_border_width_all(2)
+	hs.set_content_margin_all(10)
+	help_panel.add_theme_stylebox_override("panel", hs)
+	help_txt = RichTextLabel.new()
+	help_txt.bbcode_enabled = true
+	help_txt.selection_enabled = true
+	help_txt.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	help_panel.add_child(help_txt)
+	canvas.add_child(help_panel)
 	_rename = ConfirmationDialog.new()
 	_rename.title = "Renommer le plan"
 	_rename.set_meta("k_nolint", true)
@@ -242,6 +279,8 @@ func _touch() -> void:
 
 
 func _refresh_all() -> void:
+	if help_panel != null and help_panel.visible:
+		_fill_help()
 	for id in nodes:
 		(nodes[id] as Zone).refresh()
 	if canvas != null:
@@ -899,6 +938,51 @@ func _spawn_all() -> void:
 		_spawn_frame(f)
 	for d in zones:
 		_spawn(d)
+
+
+# ------------------------------------------------------------------ Aide (fils)
+
+func _fill_help() -> void:
+	var acc := T.OK.to_html(false)
+	var out: PackedStringArray = []
+	out.append("[b][color=#%s]Comment marchent les fils[/color][/b]" % acc)
+	out.append("Un fil envoie ce qu'une zone a conclu vers une autre. Texte envoyé : la [b]synthèse[/b] si la zone de départ est clôturée, sinon la fin de sa discussion.\n")
+	out.append("[b]Clic sur l'étiquette[/b] du fil = change son type · [b]clic droit[/b] = le supprime.\n")
+	out.append("[color=#%s]■ nourrit[/color] : l'arrivée s'appuie sur la source comme base de travail." % acc)
+	out.append("[color=#%s]■ critique[/color] : l'arrivée critique la source (faiblesses, risques, oublis)." % acc)
+	out.append("[color=#%s]■ compare[/color] : l'arrivée met plusieurs sources en balance, critère par critère. [b]Il faut au moins 2 fils compare vers la même zone.[/b]" % acc)
+	out.append("[color=#%s]■ fusionne[/color] : l'arrivée réunit plusieurs sources en une seule proposition et règle leurs contradictions. [b]Au moins 2 fils aussi.[/b]\n" % acc)
+	out.append("Ensuite, le bouton [b]Lancer[/b] de la zone d'arrivée démarre l'IA. Si une source change après coup : bordure orange ⚠ et bouton [b]Relancer[/b].\n")
+	out.append("[b][color=#%s]Dans ton plan[/color][/b]" % acc)
+	if links.is_empty():
+		out.append("Aucun fil pour l'instant : tire le rond ● d'une zone vers une autre.")
+	var count := {}
+	for l in links:
+		var t := str(l.get("type", "feed"))
+		count[str(l.to) + "|" + t] = int(count.get(str(l.to) + "|" + t, 0)) + 1
+	for l in links:
+		var a := _zone(str(l.from))
+		var b := _zone(str(l.to))
+		if a.is_empty() or b.is_empty():
+			continue
+		var t := str(l.get("type", "feed"))
+		var src := "sa synthèse" if (a.closed and str(a.summary).strip_edges() != "") else "la fin de sa discussion (pas encore clôturée)"
+		var eff := ""
+		match t:
+			"feed":
+				eff = "« %s » reçoit %s de « %s » comme base de travail." % [str(b.title), src, str(a.title)]
+			"critique":
+				eff = "« %s » va critiquer %s de « %s »." % [str(b.title), src, str(a.title)]
+			"compare":
+				eff = "« %s » va comparer %s de « %s » avec les autres sources." % [str(b.title), src, str(a.title)]
+				if int(count[str(l.to) + "|compare"]) < 2:
+					eff += " [color=#fbbf24]Il n'y a qu'un fil compare : relie une 2e zone à « %s » pour avoir quelque chose à comparer.[/color]" % str(b.title)
+			"merge":
+				eff = "« %s » va fusionner %s de « %s » avec les autres sources." % [str(b.title), src, str(a.title)]
+				if int(count[str(l.to) + "|merge"]) < 2:
+					eff += " [color=#fbbf24]Un seul fil fusionne : ajoute une 2e source vers « %s ».[/color]" % str(b.title)
+		out.append("• [b]« %s » → « %s »[/b] (%s)\n  %s" % [str(a.title), str(b.title), str(LINKS[t][0]), eff])
+	help_txt.text = "\n".join(out)
 
 
 # ------------------------------------------------------------------ Recherche
