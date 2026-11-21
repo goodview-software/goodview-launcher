@@ -2,11 +2,18 @@ extends Node
 ## Contexte partagé : services (store, catalogue, installateur, mises à jour), routeur et utilitaires.
 
 signal profile_changed
+signal theme_changed  # charte (univers) changée : tout l'écran se recolore
+signal active_changed  # assistant actif changé
 
 const Store := preload("res://core/store.gd")
 const Catalog := preload("res://core/catalog.gd")
 const Installer := preload("res://core/installer.gd")
 const Updater := preload("res://core/updater.gd")
+const Ollama := preload("res://core/ollama.gd")
+const Chats := preload("res://core/chats.gd")
+const Orchestra := preload("res://core/orchestra.gd")
+const T := preload("res://ui/theme.gd")
+const U := preload("res://ui/universe.gd")
 const VERSION: String = preload("res://version.gd").VERSION
 
 var store: Store
@@ -14,6 +21,13 @@ var catalog: Catalog
 var installer: Installer
 var updater: Updater
 var router: Node  # ui/router.gd
+var ollama: Ollama
+var chats: Chats
+var orchestra: Orchestra
+var models: Array = []  # [{name, size}] vus par /api/tags
+var active := 0  # assistant actif (= univers affiché)
+var pull := {}  # téléchargement de modèle en cours {model, ratio, status, req, error}
+var pending_chat := ""  # conversation à ouvrir par la page Chat
 
 
 ## sandbox = true : fichiers isolés dans user://gltest/, aucun réseau (tests).
@@ -36,6 +50,18 @@ func setup(sandbox := false) -> void:
 	updater.net = not sandbox
 	add_child(updater)
 	installer.finished.connect(_on_finished)
+	ollama = Ollama.new()
+	ollama.base_url = str(store.get_s("chat", "url", Ollama.DEFAULT_URL))
+	add_child(ollama)
+	chats = Chats.new(store.root + "chats/")
+	chats.export_dir = ProjectSettings.globalize_path(store.root + "export") if sandbox else ""
+	chats.load_index()
+	orchestra = Orchestra.new()
+	orchestra.ollama = ollama
+	orchestra.allow = bool(store.get_s("chat", "delegate", true))
+	add_child(orchestra)
+	active = store.avatar
+	T.apply(active)
 
 
 ## Démarre les services : cache affiché tout de suite, puis rafraîchissement en arrière-plan.
@@ -57,18 +83,40 @@ func _on_finished(app_name: String, ok: bool, msg: String) -> void:
 		notify("Installation annulée")
 
 
-func notify(text: String, kind := "info") -> void:
+func notify(text: String, kind := "info", action := "", cb := Callable()) -> void:
 	if router != null:
-		router.toast(text, kind)
+		router.toast(text, kind, action, cb)
 
 
 func set_profile(new_pseudo: String, new_avatar: int) -> void:
 	var np := new_pseudo.strip_edges()
 	if np != "":
 		store.pseudo = np
+	var changed := store.avatar != clampi(new_avatar, 0, 7)
 	store.avatar = clampi(new_avatar, 0, 7)
 	store.save_all()
+	if changed:
+		set_active(store.avatar)
 	profile_changed.emit()
+
+
+## Change l'assistant actif : la charte de l'app suit (recolorisation immédiate de toutes les pages).
+func set_active(i: int) -> void:
+	i = clampi(i, 0, U.count() - 1)
+	active = i
+	if T.apply(i):
+		theme_changed.emit()
+	active_changed.emit()
+
+
+## Modèle Ollama d'un assistant (préféré s'il est installé, sinon repli).
+func model_for(ai: int) -> String:
+	return U.pick_model(ai, models)
+
+
+## Page affichée au démarrage : "chat" (défaut) ou "home" (Apps).
+func start_page() -> String:
+	return "home" if str(store.get_s("ui", "start", "chat")) == "home" else "chat"
 
 
 ## "soon" (pas de release), "nolinux", "none" (installable), "ok" (à jour), "update"

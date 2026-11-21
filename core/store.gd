@@ -5,6 +5,7 @@ extends RefCounted
 ##   ~/.config/goodview/profile.json  {pseudo, mascot}  lu par les autres apps
 ## Le cache du catalogue vit dans catalog.json + cache/icons/.
 
+const U := preload("res://ui/universe.gd")
 var root := "user://"
 var real := true  # false = bac à sable (tests) : aucun fichier hors de `root`
 var installed := {}  # repo -> {tag, exe, desk}
@@ -69,7 +70,7 @@ func write_shared_profile() -> void:
 	DirAccess.make_dir_recursive_absolute(dir)
 	var f := FileAccess.open(dir + "/profile.json", FileAccess.WRITE)
 	if f != null:
-		f.store_string(JSON.stringify({"pseudo": pseudo, "mascot": avatar}))
+		f.store_string(JSON.stringify({"pseudo": pseudo, "mascot": avatar, "theme": U.shared_theme(avatar)}))
 		f.close()
 
 

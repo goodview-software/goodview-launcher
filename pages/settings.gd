@@ -11,6 +11,30 @@ func _init() -> void:
 
 
 func build() -> void:
+	# --- Démarrage et assistants
+	var c0 := W.card(body)
+	W.label("Assistants", 18, T.TEXT, c0)
+	var r0 := W.setting_row(c0, "Page de démarrage", "")
+	var sg := W.Seg.new([["chat", "Chat"], ["home", "Apps"]], ctx.start_page())
+	sg.custom_minimum_size = Vector2(190, 38)
+	sg.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	sg.changed.connect(func(id: String): ctx.store.set_s("ui", "start", id))
+	r0.add_child(sg)
+	W.hsep(c0)
+	var r00 := W.setting_row(c0, "Les assistants peuvent s'appeler", "Goody et les experts se posent des questions entre eux")
+	var tg0 := W.Toggle.new()
+	tg0.set_on(ctx.orchestra.allow)
+	tg0.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	tg0.toggled.connect(func(on: bool):
+		ctx.orchestra.allow = on
+		ctx.store.set_s("chat", "delegate", on))
+	r00.add_child(tg0)
+	W.hsep(c0)
+	var r01 := W.setting_row(c0, "Réglages du chat", "Ollama, modèles, température, prompt")
+	var b01 := W.IconBtn.new("sliders", 44)
+	b01.pressed.connect(func(): router.push("chat_settings"))
+	r01.add_child(b01)
+
 	# --- Mises à jour
 	var c1 := W.card(body)
 	W.label("Mises à jour", 18, T.TEXT, c1)

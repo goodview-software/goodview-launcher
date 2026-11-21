@@ -3,6 +3,7 @@ extends RefCounted
 
 const T := preload("res://ui/theme.gd")
 const Ico := preload("res://ui/icons.gd")
+const U := preload("res://ui/universe.gd")
 
 
 # ------------------------------------------------------------------ Helpers de construction
@@ -287,15 +288,16 @@ class Seg extends Control:
 
 class Orb extends Control:
 	const SHEET := preload("res://mascot/goody.png")
+	const XSHEET := preload("res://mascot/goody_extra.png")  # talk / think / call / listen (ligne = variante*4 + anim)
 	const ANIMS := {"idle": [0, 4], "happy": [1, 4], "wait": [2, 4], "off": [3, 4], "sad": [4, 4]}
-	const FPS := {"idle": 3.0, "happy": 6.0, "wait": 3.0, "off": 1.5, "sad": 2.0}
-	const COLORS := {"wait": Color("ffb454"), "idle": Color("4de1b4"), "happy": Color("4de1b4"),
-			"off": Color("5b6573"), "sad": Color("ff6b6b")}
+	const XANIMS := {"talk": 0, "think": 1, "call": 2, "listen": 3}
+	const FPS := {"idle": 3.0, "happy": 6.0, "wait": 3.0, "off": 1.5, "sad": 2.0, "talk": 7.0, "think": 3.0, "call": 5.0, "listen": 2.5}
 	var color := Color("5b6573")
 	var variant := 0
 	var level := 0.0
 	var pulse := 0.0
 	var t := 0.0
+	var speed_mult := 1.0  # lié au rythme des jetons
 	var anim := "off":
 		set(v):
 			if v != anim:
@@ -306,10 +308,21 @@ class Orb extends Control:
 		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 
+	func _target() -> Color:
+		match anim:
+			"wait", "think":
+				return T.WARN
+			"off":
+				return Color("5b6573")
+			"sad":
+				return T.BAD
+		return T.OK
+
 	func _process(d: float) -> void:
 		pulse = fposmod(pulse + d, TAU)
-		t += d * FPS[anim] * (1.0 + level * 1.5)
-		color = color.lerp(COLORS[anim], 0.1)
+		var u: Dictionary = U.get_u(variant)
+		t += d * FPS[anim] * (1.0 + level * 1.5) * speed_mult * float(u.anim.speed)
+		color = color.lerp(_target(), 0.1)
 		queue_redraw()
 
 	func _draw() -> void:
@@ -319,12 +332,19 @@ class Orb extends Control:
 			var rr := r + 8.0 * (i + 1) + level * 14.0 + sin(pulse + i) * 2.0
 			draw_circle(c, rr, Color(color, 0.11 - i * 0.025))
 		draw_circle(c, r, Color(color, 0.16))
-		var row: int = ANIMS[anim][0] + variant * 5
-		var n: int = ANIMS[anim][1]
 		var sc := maxi(1, int(size.y * 0.72 / 32.0))
 		var px := 32 * sc
-		var pos := (c - Vector2(px, px) / 2.0).round()
-		draw_texture_rect_region(SHEET, Rect2(pos, Vector2(px, px)), Rect2((int(t) % n) * 32, row * 32, 32, 32))
+		var u: Dictionary = U.get_u(variant)
+		var bounce := 0.0
+		if anim == "talk":
+			bounce = -absf(sin(t * 1.3)) * 2.0 * float(u.anim.bounce) * sc
+		var pos := (c - Vector2(px, px) / 2.0 + Vector2(0, bounce)).round()
+		if XANIMS.has(anim):
+			draw_texture_rect_region(XSHEET, Rect2(pos, Vector2(px, px)), Rect2((int(t) % 4) * 32, (variant * 4 + XANIMS[anim]) * 32, 32, 32))
+		else:
+			var row: int = ANIMS[anim][0] + variant * 5
+			var n: int = ANIMS[anim][1]
+			draw_texture_rect_region(SHEET, Rect2(pos, Vector2(px, px)), Rect2((int(t) % n) * 32, row * 32, 32, 32))
 
 
 ## Icône d'app : carré arrondi + image (ou lettre colorée), halo et pastille d'état optionnels.
@@ -370,7 +390,7 @@ class AppIcon extends Control:
 class Avatar extends Tap:
 	const SHEET := preload("res://mascot/variants.png")
 	const BODIES := [Color("4de1b4"), Color("ff8fb1"), Color("6aa8ff"), Color("ffa24d"), Color("b58bff"),
-			Color("ffd84d"), Color("ff6b6b"), Color("c9d1da")]
+			Color("ffd84d"), Color("ff6b6b"), Color("c9d1da")]  # = accents de ui/universe.gd
 	var variant := 0:
 		set(v):
 			variant = v
@@ -499,7 +519,9 @@ class Skeleton extends Control:
 ## Notification discrète en bas de l'écran (remplace les boîtes de dialogue).
 class Toast extends PanelContainer:
 	var lbl: Label
+	var act: Button
 	var tw: Tween
+	var _cb := Callable()
 
 	func _lbl(text: String, size_: int, color: Color, parent: Control) -> Label:
 		var l := Label.new()
@@ -513,15 +535,36 @@ class Toast extends PanelContainer:
 	func _init() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 		modulate.a = 0.0
-		lbl = _lbl("", 15, T.TEXT, self)
+		var h := HBoxContainer.new()
+		h.add_theme_constant_override("separation", 14)
+		h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(h)
+		lbl = _lbl("", 15, T.TEXT, h)
 		lbl.autowrap_mode = TextServer.AUTOWRAP_OFF
 		lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		act = Button.new()
+		act.flat = true
+		act.focus_mode = Control.FOCUS_NONE
+		act.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		act.add_theme_font_size_override("font_size", 15)
+		act.visible = false
+		act.pressed.connect(func():
+			if _cb.is_valid():
+				_cb.call()
+			_cb = Callable()
+			if tw != null:
+				tw.kill()
+			tw = create_tween()
+			tw.tween_property(self, "modulate:a", 0.0, 0.2))
+		h.add_child(act)
 		set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 		grow_horizontal = Control.GROW_DIRECTION_BOTH
 		grow_vertical = Control.GROW_DIRECTION_BEGIN
-		offset_bottom = -26
+		offset_bottom = -94  # au-dessus de la barre de navigation
 
-	func show_msg(text: String, kind := "info") -> void:
+	## action : libellé d'un bouton (ex. « Annuler ») qui appelle `cb` ; la notification reste 5 s.
+	func show_msg(text: String, kind := "info", action := "", cb := Callable()) -> void:
 		var col := T.TEXT
 		match kind:
 			"ok":
@@ -534,10 +577,16 @@ class Toast extends PanelContainer:
 		add_theme_stylebox_override("panel", sb)
 		lbl.text = text
 		lbl.add_theme_color_override("font_color", col)
+		act.visible = action != ""
+		act.text = action
+		act.add_theme_color_override("font_color", T.OK)
+		act.add_theme_color_override("font_hover_color", T.OK.lightened(0.3))
+		_cb = cb
+		mouse_filter = Control.MOUSE_FILTER_STOP if action != "" else Control.MOUSE_FILTER_IGNORE
 		if tw != null:
 			tw.kill()
 		tw = create_tween()
 		tw.tween_property(self, "modulate:a", 1.0, 0.18)
-		tw.tween_interval(2.8)
+		tw.tween_interval(5.0 if action != "" else 2.8)
 		tw.tween_property(self, "modulate:a", 0.0, 0.3)
-
+		tw.tween_callback(func(): mouse_filter = Control.MOUSE_FILTER_IGNORE)

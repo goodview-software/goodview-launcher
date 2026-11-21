@@ -6,12 +6,16 @@ signal changed
 const Ctx := preload("res://core/ctx.gd")
 const T := preload("res://ui/theme.gd")
 const W := preload("res://ui/widgets.gd")
+const U := preload("res://ui/universe.gd")
 
 var ctx: Ctx
 var preview: W.Avatar
 var pickers: Array = []
 var edit: LineEdit
 var avatar := 0
+var name_lbl: Label
+var motto_lbl: Label
+var role_lbl: Label
 
 
 func _ready() -> void:
@@ -21,6 +25,12 @@ func _ready() -> void:
 	preview.custom_minimum_size = Vector2(130, 130)
 	preview.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	add_child(preview)
+	name_lbl = W.label("", 28, T.OK, self)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	motto_lbl = W.label("", 15, T.TEXT, self)
+	motto_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	role_lbl = W.label("", 13, T.DIM, self)
+	role_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var pick := HFlowContainer.new()
 	pick.alignment = FlowContainer.ALIGNMENT_CENTER
 	pick.add_theme_constant_override("h_separation", 10)
@@ -30,6 +40,7 @@ func _ready() -> void:
 		var av := W.Avatar.new(true)
 		av.variant = i
 		av.custom_minimum_size = Vector2(60, 60)
+		av.tooltip_text = "%s · %s" % [U.get_u(i).name, U.get_u(i).motto]
 		av.pressed.connect(func(): _pick(i))
 		pick.add_child(av)
 		pickers.append(av)
@@ -56,6 +67,11 @@ func _pick(i: int) -> void:
 
 func _refresh() -> void:
 	preview.variant = avatar
+	var u := U.get_u(avatar)
+	name_lbl.text = u.name
+	name_lbl.add_theme_color_override("font_color", Color(str(u.accent)))
+	motto_lbl.text = "« %s »" % u.motto
+	role_lbl.text = u.specialty
 	for i in pickers.size():
 		pickers[i].selected = i == avatar
 

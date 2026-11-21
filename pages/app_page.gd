@@ -23,7 +23,7 @@ func build() -> void:
 		_connect()
 	if a.is_empty():
 		set_title("App introuvable")
-		var sv := W.StateView.new("sad", ctx.store.avatar, "App introuvable", "Elle a peut-être été retirée du catalogue.", "Retour", 170)
+		var sv := W.StateView.new("sad", ctx.active, "App introuvable", "Elle a peut-être été retirée du catalogue.", "Retour", 170)
 		sv.action.connect(func(): router.back())
 		body.add_child(sv)
 		return
@@ -34,9 +34,9 @@ func build() -> void:
 
 func _connect() -> void:
 	_connected = true
-	ctx.catalog.changed.connect(_refresh)
-	ctx.installer.changed.connect(_refresh)
-	ctx.installer.progress.connect(_on_progress)
+	link(ctx.catalog.changed, _refresh)
+	link(ctx.installer.changed, _refresh)
+	link(ctx.installer.progress, _on_progress)
 
 
 func _refresh() -> void:

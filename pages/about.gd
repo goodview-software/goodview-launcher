@@ -15,12 +15,12 @@ func _init() -> void:
 
 
 func build() -> void:
-	var sv := W.StateView.new("idle", ctx.store.avatar, "Goodview Launcher", "Version " + ctx.VERSION, "", 170)
+	var sv := W.StateView.new("idle", ctx.active, "Goodview Launcher", "Version " + ctx.VERSION, "", 170)
 	body.add_child(sv)
 	_upd_box = VBoxContainer.new()
 	_upd_box.add_theme_constant_override("separation", 12)
 	body.add_child(_upd_box)
-	ctx.updater.changed.connect(_render_update)
+	link(ctx.updater.changed, _render_update)
 	_render_update()
 	var c := W.card(body, 8)
 	for i in LINKS.size():

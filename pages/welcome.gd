@@ -17,7 +17,7 @@ func build() -> void:
 	_box = VBoxContainer.new()
 	_box.add_theme_constant_override("separation", 18)
 	body.add_child(_box)
-	_show_step(0, true)
+	_show_step(step, true)
 
 
 func _show_step(n: int, instant := false) -> void:
@@ -42,7 +42,7 @@ func _step_hello() -> void:
 	var gap := Control.new()
 	gap.custom_minimum_size = Vector2(0, 24)
 	_box.add_child(gap)
-	var sv := W.StateView.new("happy", ctx.store.avatar, "Bienvenue sur Goodview", "Toutes tes apps Goodview, au même endroit.", "", 240)
+	var sv := W.StateView.new("happy", ctx.active, "Bienvenue sur Goodview", "Toutes tes apps Goodview, au même endroit.", "", 240)
 	_box.add_child(sv)
 	var b := W.Btn.new("Commencer", "primary")
 	b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
@@ -70,7 +70,7 @@ func finish() -> void:
 		_editor.commit()
 	ctx.store.welcomed = true
 	ctx.store.save_cfg()
-	router.reset("home")
+	router.reset(ctx.start_page())
 
 
 func on_back() -> bool:

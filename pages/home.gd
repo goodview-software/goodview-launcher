@@ -1,18 +1,18 @@
 extends "res://pages/page.gd"
-## Accueil : bannière de mise à jour du launcher, mascotte, « Tout mettre à jour », recherche / tri, liste des apps.
+## Apps : panneau sobre (titre, nombre, tout mettre à jour, recherche, tri, vérifier, état du catalogue)
+## + grille d'apps à 2 colonnes. Écran large : panneau à gauche, grille à droite ; écran étroit : une colonne.
 
+const AppCard := preload("res://ui/app_card.gd")
 const SORTS := [["recent", "Récents"], ["az", "A–Z"], ["updates", "Mises à jour"]]
 const SEARCH_MIN := 6  # la recherche apparaît au-delà de ce nombre d'apps
+const WIDE_MIN := 900.0  # largeur de page à partir de laquelle le panneau passe à gauche
 
 var _chk: W.IconBtn
-var _avatar: W.Avatar
+var _chk_btn: W.Btn
 var _banner: VBoxContainer
-var _orb_box: VBoxContainer
-var _orb: W.Orb
-var _status: Label
+var _count: Label
 var _sub: Label
 var _actions: VBoxContainer
-var _toolbar: HFlowContainer
 var _search: LineEdit
 var _seg: W.Seg
 var _list: VBoxContainer
@@ -20,75 +20,97 @@ var _prog: ProgressBar
 var _prog_lbl: Label
 var query := ""
 var sort_mode := "recent"
+var force_wide := -1  # -1 auto, 0 une colonne, 1 deux colonnes (tests)
+var _wide := false
 
 
 func _init() -> void:
 	has_back = false
+	max_w = 1120.0
+
+
+func is_wide() -> bool:
+	if force_wide >= 0:
+		return force_wide == 1
+	var w := size.x if size.x > 0.0 else get_viewport_rect().size.x
+	return w >= WIDE_MIN
+
+
+func set_wide(v: bool) -> void:
+	force_wide = 1 if v else 0
+	_fit_width()
+
+
+func _fit_width() -> void:
+	super()
+	if body != null and is_inside_tree() and is_wide() != _wide:
+		rebuild()
 
 
 func build() -> void:
 	set_title("Goodview")
+	_wide = is_wide()
 	sort_mode = str(ctx.store.get_s("ui", "sort", "recent"))
-	# en-tête : vérifier, paramètres, profil
-	_chk = W.IconBtn.new("refresh", 44)
-	_chk.tooltip_text = "Vérifier les mises à jour"
-	_chk.pressed.connect(_on_check)
-	head_right.add_child(_chk)
 	var gear := W.IconBtn.new("gear", 44)
 	gear.tooltip_text = "Paramètres"
 	gear.pressed.connect(func(): router.push("settings"))
 	head_right.add_child(gear)
-	_avatar = W.Avatar.new(true)
-	_avatar.custom_minimum_size = Vector2(44, 44)
-	_avatar.tooltip_text = "Profil"
-	_avatar.pressed.connect(func(): router.push("profile"))
-	head_right.add_child(_avatar)
 
-	body.add_theme_constant_override("separation", 14)
+	var lay: BoxContainer = HBoxContainer.new() if _wide else VBoxContainer.new()
+	lay.add_theme_constant_override("separation", 28 if _wide else 18)
+	body.add_child(lay)
+	var side := VBoxContainer.new()
+	side.add_theme_constant_override("separation", 12)
+	if _wide:
+		side.custom_minimum_size = Vector2(290, 0)
+		side.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	lay.add_child(side)
+	var tr := HBoxContainer.new()
+	tr.add_theme_constant_override("separation", 10)
+	side.add_child(tr)
+	var tcol := VBoxContainer.new()
+	tcol.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tcol.add_theme_constant_override("separation", 0)
+	tr.add_child(tcol)
+	W.label("Apps", 30, T.TEXT, tcol)
+	_count = W.label("", 14, T.DIM, tcol)
+	_chk = W.IconBtn.new("refresh", 44)
+	_chk.tooltip_text = "Vérifier les mises à jour"
+	_chk.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_chk.pressed.connect(_on_check)
+	tr.add_child(_chk)
+	_sub = W.label("", 13, T.DIM, side)
 	_banner = VBoxContainer.new()
-	body.add_child(_banner)
-	_orb_box = VBoxContainer.new()
-	_orb_box.add_theme_constant_override("separation", 6)
-	body.add_child(_orb_box)
-	_orb = W.Orb.new()
-	_orb.custom_minimum_size = Vector2(0, 190)
-	_orb_box.add_child(_orb)
-	_status = W.label("", 22, T.TEXT, _orb_box)
-	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_sub = W.label("", 13, T.DIM, _orb_box)
-	_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	side.add_child(_banner)
 	_actions = VBoxContainer.new()
 	_actions.add_theme_constant_override("separation", 10)
-	body.add_child(_actions)
-	_toolbar = HFlowContainer.new()
-	_toolbar.add_theme_constant_override("h_separation", 10)
-	_toolbar.add_theme_constant_override("v_separation", 10)
-	body.add_child(_toolbar)
+	side.add_child(_actions)
 	_search = LineEdit.new()
 	_search.placeholder_text = "Rechercher"
 	_search.clear_button_enabled = true
-	_search.custom_minimum_size = Vector2(220, 40)
-	_search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_search.custom_minimum_size = Vector2(0, 40)
+	_search.text = query
 	_search.text_changed.connect(func(t: String):
 		query = t.strip_edges().to_lower()
 		_render_list())
-	_toolbar.add_child(_search)
+	side.add_child(_search)
 	_seg = W.Seg.new(SORTS, sort_mode)
-	_seg.custom_minimum_size = Vector2(SORTS.size() * 104, 40)
+	_seg.custom_minimum_size = Vector2(0, 40)
 	_seg.changed.connect(func(id: String):
 		sort_mode = id
 		ctx.store.set_s("ui", "sort", id)
 		_render_list())
-	_toolbar.add_child(_seg)
+	side.add_child(_seg)
 	_list = VBoxContainer.new()
 	_list.add_theme_constant_override("separation", 0)
-	body.add_child(_list)
+	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	lay.add_child(_list)
 
-	ctx.catalog.changed.connect(_render)
-	ctx.installer.changed.connect(_render)
-	ctx.installer.progress.connect(_on_progress)
-	ctx.updater.changed.connect(_render)
-	ctx.profile_changed.connect(_render)
+	link(ctx.catalog.changed, _render)
+	link(ctx.installer.changed, _render)
+	link(ctx.installer.progress, _on_progress)
+	link(ctx.updater.changed, _render)
+	link(ctx.profile_changed, _render)
 	_render()
 
 
@@ -112,10 +134,8 @@ func _on_check() -> void:
 # ------------------------------------------------------------------ Rendu
 
 func _render() -> void:
-	if not is_inside_tree() or _list == null:
+	if not is_inside_tree() or _list == null or not is_instance_valid(_list):
 		return
-	_avatar.variant = ctx.store.avatar
-	_avatar.badge = ctx.has_updates()
 	_chk.spin = ctx.catalog.checking or ctx.catalog.busy or ctx.updater.state == "checking"
 	_render_banner()
 	_render_status()
@@ -180,28 +200,16 @@ func _render_banner() -> void:
 func _render_status() -> void:
 	var cat := ctx.catalog
 	var n := cat.apps.size()
-	var showing := n > 0 or cat.state == "loading"
-	_orb_box.visible = showing
-	_orb.variant = ctx.store.avatar
+	_count.text = "Chargement…" if cat.state == "loading" and n == 0 else "%d app%s" % [n, "s" if n > 1 else ""]
 	_sub.text = ""
 	_sub.add_theme_color_override("font_color", T.DIM)
 	if cat.state == "loading" and n == 0:
-		_orb.anim = "wait"
-		_status.text = "Chargement du catalogue…"
 		return
-	var upd := ctx.updates().size()
-	if upd > 0:
-		_orb.anim = "happy"
-		_status.text = "%d mise%s à jour" % [upd, "s" if upd > 1 else ""]
-	else:
-		_orb.anim = "idle"
-		_status.text = "%d app%s" % [n, "s" if n > 1 else ""]
 	if not cat.online:
-		_orb.anim = "sad" if upd == 0 else "happy"
 		if cat.rate_reset > Time.get_unix_time_from_system():
 			_sub.text = "Limite GitHub · réessaie dans %d min" % maxi(1, int(ceil((cat.rate_reset - Time.get_unix_time_from_system()) / 60.0)))
 		else:
-			_sub.text = "Hors ligne · vérifié " + ctx.ago(cat.last_check) if cat.last_check > 0.0 else "Hors ligne"
+			_sub.text = ("Hors ligne · vérifié " + ctx.ago(cat.last_check)) if cat.last_check > 0.0 else "Hors ligne"
 		_sub.add_theme_color_override("font_color", T.WARN)
 	elif cat.last_check > 0.0:
 		_sub.text = "Vérifié " + ctx.ago(cat.last_check)
@@ -278,12 +286,12 @@ func _before(a: Dictionary, b: Dictionary) -> bool:
 
 
 func _render_list() -> void:
-	if _list == null:
+	if _list == null or not is_instance_valid(_list):
 		return
 	_clear(_list)
 	var cat := ctx.catalog
 	var n := cat.apps.size()
-	_toolbar.visible = n > 1
+	_seg.visible = n > 1
 	_search.visible = n > SEARCH_MIN
 	if n <= SEARCH_MIN and query != "":
 		query = ""
@@ -291,7 +299,9 @@ func _render_list() -> void:
 	if n == 0:
 		match cat.state:
 			"loading":
-				_list.add_child(W.Skeleton.new(4))
+				var g := _grid()
+				for i in 4:
+					g.add_child(AppCard.Ghost.new(i))
 			"offline":
 				_state_view("sad", "Hors ligne", "Vérifie ta connexion Internet, puis réessaie.", true)
 			"error":
@@ -303,62 +313,32 @@ func _render_list() -> void:
 	if apps.is_empty():
 		_state_view("off", "Aucun résultat", "Essaie un autre mot.", false)
 		return
-	var group := PanelContainer.new()
-	group.add_theme_stylebox_override("panel", T.style(T.CARD, 24, 8))
-	_list.add_child(group)
-	var lb := VBoxContainer.new()
-	lb.add_theme_constant_override("separation", 0)
-	group.add_child(lb)
-	for i in apps.size():
-		if i > 0:
-			W.hsep(lb)
-		lb.add_child(_row(apps[i]))
+	var g2 := _grid()
+	for a in apps:
+		g2.add_child(_card(a))
+
+
+func _grid() -> GridContainer:
+	var g := GridContainer.new()
+	g.columns = 2
+	g.add_theme_constant_override("h_separation", 16)
+	g.add_theme_constant_override("v_separation", 16)
+	g.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_list.add_child(g)
+	return g
 
 
 func _state_view(anim: String, title: String, msg: String, retry: bool) -> void:
-	var sv := W.StateView.new(anim, ctx.store.avatar, title, msg, "Réessayer" if retry else "", 170)
+	var sv := W.StateView.new(anim, ctx.active, title, msg, "Réessayer" if retry else "", 170)
 	sv.action.connect(func(): ctx.catalog.refresh())
 	_list.add_child(sv)
 
 
-func _row(a: Dictionary) -> Control:
-	var row := W.Row.new()
-	row.pressed.connect(func(): router.push("app", {"name": a.name}))
-	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 14)
-	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(h)
-	h.add_child(app_icon(a, 56, false))
-	var v := VBoxContainer.new()
-	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	v.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	v.add_theme_constant_override("separation", 2)
-	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	h.add_child(v)
-	W.label(Catalog.title(a), 18, T.TEXT, v).mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var tl := W.label(Catalog.tagline(a), 13, T.DIM, v)
-	tl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	tl.autowrap_mode = TextServer.AUTOWRAP_OFF
-	tl.clip_text = true
-	var s := status_pill(a)
-	var pb := HBoxContainer.new()
-	pb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	pb.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	h.add_child(pb)
-	W.pill(pb, s[0], s[1])
-	var fav := ctx.store.is_fav(a.name)
-	var st := W.IconBtn.new("star_on" if fav else "star", 36)
-	st.col = T.WARN if fav else T.DIM
-	st.tooltip_text = "Retirer des favoris" if fav else "Ajouter aux favoris"
-	st.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	st.pressed.connect(func():
+func _card(a: Dictionary) -> Control:
+	var c := AppCard.new()
+	c.setup(app_icon(a, 88, false), Catalog.title(a), Catalog.tagline(a), status_pill(a), ctx.store.is_fav(a.name))
+	c.pressed.connect(func(): router.push("app", {"name": a.name}))
+	c.fav_toggled.connect(func():
 		ctx.store.toggle_fav(a.name)
 		_render_list())
-	h.add_child(st)
-	var ch := Control.new()
-	ch.custom_minimum_size = Vector2(18, 22)
-	ch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	ch.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ch.draw.connect(func(): W.Ico.draw_kind(ch, "chevron", ch.size / 2.0, 0.5, T.DIM))
-	h.add_child(ch)
-	return row
+	return c

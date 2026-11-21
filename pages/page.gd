@@ -10,6 +10,9 @@ const W := preload("res://ui/widgets.gd")
 var ctx: Ctx
 var router: Control
 var args := {}
+var page_id := ""
+var max_w := T.MAX_WIDTH
+var _outer: VBoxContainer
 var page_title := ""  # titre de fenêtre (vide = accueil)
 var has_back := true
 var head: HBoxContainer
@@ -22,6 +25,7 @@ var _center: CenterContainer
 
 func _ready() -> void:
 	var outer := VBoxContainer.new()
+	_outer = outer
 	outer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	outer.add_theme_constant_override("separation", 10)
 	add_child(outer)
@@ -68,6 +72,7 @@ func _ready() -> void:
 	body.add_theme_constant_override("separation", 16)
 	_center.add_child(body)
 	get_viewport().size_changed.connect(_fit_width)
+	resized.connect(_fit_width)
 	_fit_width()
 	head_title.text = page_title
 	build()
@@ -76,7 +81,7 @@ func _ready() -> void:
 func _fit_width() -> void:
 	if body == null:
 		return
-	var w := clampf(get_viewport_rect().size.x - 36.0, 300.0, T.MAX_WIDTH)
+	var w := clampf(size.x - 36.0 if size.x > 0.0 else get_viewport_rect().size.x - 36.0, 300.0, max_w)
 	body.custom_minimum_size.x = w
 	head.custom_minimum_size.x = w
 
@@ -89,10 +94,25 @@ func set_title(t: String) -> void:
 
 ## Vide le contenu (suppression immédiate pour éviter les doublons) puis le reconstruit.
 func rebuild() -> void:
+	for c in head_right.get_children():
+		head_right.remove_child(c)
+		c.queue_free()
 	for c in body.get_children():
 		body.remove_child(c)
 		c.queue_free()
 	build()
+
+
+## Changement de charte (univers) : reconstruit la page avec les nouvelles couleurs.
+func retheme() -> void:
+	if body != null:
+		rebuild()
+
+
+## Connecte un signal une seule fois (les pages se reconstruisent sans empiler les connexions).
+func link(sig: Signal, cb: Callable) -> void:
+	if not sig.is_connected(cb):
+		sig.connect(cb)
 
 
 ## À surcharger : remplit `body`.

@@ -78,6 +78,8 @@ def frame(lift=0, squash=0, eye="open", look=0, mouth="smile", arms="down", extr
     ay = top + 9
     if arms == "up":
         px(d, 3, top + 1, 3, 5, BODY); px(d, 26, top + 1, 3, 5, BODY)
+    elif arms == "wave":
+        px(d, 4, ay, 2, 5, SHADE); px(d, 26, top - 2, 3, 7, BODY)
     else:
         px(d, 4, ay, 2, 5, SHADE); px(d, 26, ay, 2, 5, SHADE)
     # yeux
@@ -90,6 +92,8 @@ def frame(lift=0, squash=0, eye="open", look=0, mouth="smile", arms="down", extr
             px(d, x, ey + 3, 3, 1, DARK)
         elif eye == "happy":
             px(d, x, ey + 3, 1, 1, DARK); px(d, x + 1, ey + 2, 1, 1, DARK); px(d, x + 2, ey + 3, 1, 1, DARK)
+        elif eye == "up":
+            px(d, x, ey, 3, 5, WHITE); px(d, x, ey, 3, 2, DARK)
         elif eye == "sad":
             px(d, x, ey, 3, 5, DARK); px(d, x, ey, 1, 1, WHITE); px(d, x + 1, ey + 5, 1, 2, BLUE)
     px(d, 8, ey + 5, 2, 2, PINK + ()); px(d, 22, ey + 5, 2, 2, PINK)  # joues
@@ -125,16 +129,60 @@ def anims(v):
     "sad": [frame(eye="sad", mouth="sad", v=v), frame(eye="sad", mouth="sad", squash=1, v=v)] * 2,
 }
 NAMES = ["idle", "happy", "wait", "off", "sad"]
+EXTRA_ONLY = "--extra" in sys.argv
 sheet = Image.new("RGBA", (S * 4, S * 5 * len(BODIES)), (0, 0, 0, 0))
 variants = Image.new("RGBA", (S * len(BODIES), S), (0, 0, 0, 0))
-for v in range(len(BODIES)):
+for v in range(0 if EXTRA_ONLY else len(BODIES)):
     A = anims(v)
     for row, name in enumerate(NAMES):
         for i, im in enumerate(A[name]):
             sheet.paste(im, (i * S, (v * 5 + row) * S))
     variants.paste(A["idle"][0], (v * S, 0))
-sheet.save("mascot/goody.png")
-variants.save("mascot/variants.png")
+if not EXTRA_ONLY:
+    sheet.save("mascot/goody.png")
+    variants.save("mascot/variants.png")
+# ---- Feuille complémentaire mascot/goody_extra.png : ligne = variante*4 + animation (talk, think, call, listen),
+# 4 images chacune. Ne touche pas à goody.png / variants.png (format publié : variante*5 + anim).
+def bulb(d, x, y):
+    px(d, x + 1, y, 3, 1, NOTE); px(d, x, y + 1, 5, 3, NOTE); px(d, x + 1, y + 4, 3, 1, NOTE); px(d, x + 1, y + 5, 3, 1, WHITE)
+
+
+def dots(d, n, x=24, y=4):
+    for i in range(n):
+        px(d, x + i * 3, y, 2, 2, WHITE)
+
+
+def bang(d, x=26, y=0):
+    px(d, x - 1, y, 5, 8, WHITE); px(d, x + 1, y + 1, 1, 4, DARK); px(d, x + 1, y + 6, 1, 1, DARK)
+
+
+def tilt(im, deg):
+    return im.rotate(deg, resample=Image.NEAREST, center=(16, 29))
+
+
+def extra_anims(v):
+    return {
+    "talk": [frame(mouth="open", v=v), frame(mouth="o", lift=1, v=v), frame(mouth="open", squash=1, v=v), frame(mouth="flat", lift=1, v=v)],
+    "think": [frame(eye="up", look=-1, mouth="flat", extra=lambda d: dots(d, 1), v=v),
+              frame(eye="up", mouth="flat", extra=lambda d: dots(d, 2), v=v),
+              frame(eye="up", look=1, mouth="flat", extra=lambda d: dots(d, 3), v=v),
+              frame(eye="up", mouth="o", extra=lambda d: bulb(d, 25, 1), v=v)],
+    "call": [frame(arms="wave", mouth="open", extra=bang, v=v), frame(arms="up", mouth="open", lift=1, extra=bang, v=v),
+             frame(arms="wave", mouth="open", extra=lambda d: bang(d, 26, 1), v=v), frame(arms="up", mouth="smile", lift=1, v=v)],
+    "listen": [tilt(frame(mouth="flat", look=1, v=v), 7), tilt(frame(mouth="flat", look=1, squash=1, v=v), 8),
+               tilt(frame(mouth="o", look=1, v=v), 7), tilt(frame(eye="blink", mouth="flat", look=1, v=v), 6)],
+}
+
+
+XN = ["talk", "think", "call", "listen"]
+xs = Image.new("RGBA", (S * 4, S * 4 * len(BODIES)), (0, 0, 0, 0))
+for v in range(len(BODIES)):
+    A = extra_anims(v)
+    for row, name in enumerate(XN):
+        for i, im in enumerate(A[name]):
+            xs.paste(im, (i * S, (v * 4 + row) * S))
+xs.save("mascot/goody_extra.png")
+
 if "--icon" in sys.argv:
     bg = Image.new("RGBA", (256, 256), (14, 17, 22, 255))
     bg.alpha_composite(anims(0)["idle"][0].resize((224, 224), Image.NEAREST), (16, 16))
