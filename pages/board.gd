@@ -12,6 +12,7 @@ const Orchestra := preload("res://core/orchestra.gd")
 const Surface := preload("res://ui/draw/surface.gd")
 const Bars := preload("res://ui/draw/bars.gd")
 const Geom := preload("res://ui/draw/geom.gd")
+const Assist := preload("res://ui/draw/assist.gd")
 const MAX_TOOL_ROUNDS := 4
 const FILE := "user://board.json"  # ancien fichier unique (migré vers le plan 1)
 const PLANS_DIR := "user://boards/"
@@ -65,6 +66,7 @@ var plans: Array = []  # [{id, name}]
 var plan_id := ""
 var search_e: LineEdit
 var help_btn: Button
+var assist
 var help_panel: PanelContainer
 var help_txt: RichTextLabel
 var _rename: ConfirmationDialog
@@ -179,6 +181,20 @@ func build() -> void:
 	help_txt.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	help_panel.add_child(help_txt)
 	canvas.add_child(help_panel)
+	assist = Assist.new()
+	canvas.add_child(assist)
+	assist.setup(self)
+	var ai_btn := Button.new()
+	ai_btn.text = "✨"
+	ai_btn.tooltip_text = "Assistant du graphe (Entrée) : crée et modifie des schémas sur demande"
+	ai_btn.custom_minimum_size = Vector2(44, 44)
+	ai_btn.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	ai_btn.offset_left = -108
+	ai_btn.offset_right = -64
+	ai_btn.offset_top = 10
+	ai_btn.offset_bottom = 54
+	ai_btn.pressed.connect(open_assist)
+	canvas.add_child(ai_btn)
 	_rename = ConfirmationDialog.new()
 	_rename.title = "Renommer le plan"
 	_rename.set_meta("k_nolint", true)
@@ -218,6 +234,12 @@ func _exit_tree() -> void:
 
 
 ## Les zones (éléments de type « zone » de la scène), dans l'ordre des calques.
+## Entrée sur le tableau : ouvre l'assistant du graphe.
+func open_assist() -> void:
+	if assist != null:
+		assist.open()
+
+
 func zones() -> Array:
 	return scene.zones()
 
@@ -1160,6 +1182,7 @@ func _fill_help() -> void:
 	out.append("[color=#%s]■ critique[/color] : l'arrivée critique la source (faiblesses, risques, oublis)." % acc)
 	out.append("[color=#%s]■ compare[/color] : l'arrivée met plusieurs sources en balance, critère par critère. [b]Il faut au moins 2 fils compare vers la même zone.[/b]" % acc)
 	out.append("[color=#%s]■ fusionne[/color] : l'arrivée réunit plusieurs sources en une seule proposition et règle leurs contradictions. [b]Au moins 2 fils aussi.[/b]\n" % acc)
+	out.append("[b]Entrée[/b] sur le tableau ouvre l'[b]assistant du graphe[/b] (✨) : demande-lui un schéma ou une modification ; Ctrl+Z annule tout ce qu'il vient de faire.\n")
 	out.append("Ensuite, le bouton [b]Lancer[/b] de la zone d'arrivée démarre l'IA. Si une source change après coup : bordure orange ⚠ et bouton [b]Relancer[/b].\n")
 	out.append("[b][color=#%s]Dans ton plan[/color][/b]" % acc)
 	if links().is_empty():

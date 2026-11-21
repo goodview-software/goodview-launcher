@@ -349,7 +349,7 @@ func commit() -> bool:
 			if not prev.d.has(id) or prev.d[id] != d[id]:
 				diff = true
 	_dirty.clear()
-	if not diff and o == prev.o:
+	if not diff and o == prev.o and _hi >= 0:  # (sans état de base, un plan vide ne pourrait jamais être « annulé » jusqu'au vide)
 		return false
 	if _hi < _hist.size() - 1:
 		_hist.resize(_hi + 1)

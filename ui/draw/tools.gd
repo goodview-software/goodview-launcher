@@ -399,6 +399,9 @@ func key(e: InputEventKey) -> bool:
 			if mode == "poly":
 				_finish_draw()
 			else:
+				S.host.open_assist()  # Entrée = parler à l'assistant du graphe (F2 : éditer le texte)
+		KEY_F2:
+			if true:
 				var els = sc.selected()
 				if els.size() == 1:
 					match str(els[0].type):
