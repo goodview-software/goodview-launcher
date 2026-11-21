@@ -1,10 +1,10 @@
 extends Control
-## Goodview Launcher : catalogue des apps de l'organisation GitHub, page de présentation par app,
-## installation de la dernière release (asset Linux) dans user://apps/<repo>/, mise à jour et lancement.
+## Goodview Launcher : catalogue des apps de l'organisation GitHub, fiche de présentation par app,
+## installation de la dernière release Linux dans user://apps/<repo>/, mise à jour, raccourci bureau, lancement.
 ##
 ## Convention par repo (tous optionnels) :
-##   icon.png | icon.svg   à la racine : icône affichée dans le catalogue
-##   app.json              {"tagline": "...", "description": "...", "screenshots": ["docs/a.png", ...]}
+##   icon.png | icon.svg   à la racine : icône
+##   app.json              {"name", "tagline", "description", "screenshots": ["docs/a.png", ...]}
 
 const ORGS := ["goodview-software"]
 const API := "https://api.github.com"
@@ -23,95 +23,298 @@ const C_CARD_HI := Color("1e242d")
 const C_TEXT := Color("e8ecf1")
 const C_DIM := Color("8892a0")
 const C_OK := Color("4de1b4")
-
-var token := ""
-var installed := {}  # repo -> {tag, exe}
-var apps: Array = []  # {name, org, repo, release, asset, icon, manifest}
-var busy := false
-var cur_app: Dictionary = {}
-
-var col: VBoxContainer
-var page_list: VBoxContainer
-var list_box: VBoxContainer
-var page_detail: VBoxContainer
-var status: Label
-var progress: ProgressBar
-var token_edit: LineEdit
-var pseudo := ""
-var avatar_tex: Texture2D
-var chip_avatar: Avatar
-var chip_name: Label
-var prof_avatar: Avatar
-var pseudo_edit: LineEdit
-var page_profile: VBoxContainer
-var file_dlg: FileDialog
-var upd_lbl: Label
-var upd_btn: Button
-var upd_info := {}
-var upd_http: HTTPRequest
+const C_WARN := Color("ffb454")
 
 
-# ------------------------------------------------------------------ Widgets
+# ------------------------------------------------------------------ Widgets dessinés (même langage que Pocket Speaker)
 
+class Orb extends Control:
+	const SHEET := preload("res://mascot/goody.png")
+	const ANIMS := {"idle": [0, 4], "happy": [1, 4], "wait": [2, 4], "off": [3, 4], "sad": [4, 4]}
+	const FPS := {"idle": 3.0, "happy": 6.0, "wait": 3.0, "off": 1.5, "sad": 2.0}
+	var color := Color("5b6573")
+	var level := 0.0
+	var pulse := 0.0
+	var t := 0.0
+	var anim := "off":
+		set(v):
+			if v != anim:
+				anim = v
+				t = 0.0
+
+	func _init() -> void:
+		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+
+	func _process(d: float) -> void:
+		pulse = fposmod(pulse + d, TAU)
+		t += d * FPS[anim] * (1.0 + level * 1.5)
+		queue_redraw()
+
+	func _draw() -> void:
+		var c := size / 2.0
+		var r := minf(size.x, size.y) * 0.26
+		for i in 4:
+			var rr := r + 8.0 * (i + 1) + level * 14.0 + sin(pulse + i) * 2.0
+			draw_circle(c, rr, Color(color, 0.11 - i * 0.025))
+		draw_circle(c, r, Color(color, 0.16))
+		var row: int = ANIMS[anim][0]
+		var n: int = ANIMS[anim][1]
+		var sc := maxi(1, int(size.y * 0.72 / 32.0))
+		var px := 32 * sc
+		var pos := (c - Vector2(px, px) / 2.0).round()
+		draw_texture_rect_region(SHEET, Rect2(pos, Vector2(px, px)), Rect2((int(t) % n) * 32, row * 32, 32, 32))
+
+
+class Ico:
+	static func box(ci: CanvasItem, r: Rect2, rad: float, col: Color) -> void:
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = col
+		sb.set_corner_radius_all(int(rad))
+		sb.anti_aliasing_size = 1.0
+		ci.draw_style_box(sb, r)
+
+	static func draw_kind(ci: CanvasItem, kind: String, c: Vector2, k: float, col: Color) -> void:
+		var w := 3.2 * k
+		match kind:
+			"refresh":
+				var a1 := PI * 1.45
+				ci.draw_arc(c, 14.0 * k, -PI * 0.15, a1, 28, col, w, true)
+				var p := c + Vector2(cos(a1), sin(a1)) * 14.0 * k
+				var tn := Vector2(-sin(a1), cos(a1))
+				var nm := Vector2(cos(a1), sin(a1))
+				ci.draw_colored_polygon(PackedVector2Array([p + tn * 9.0 * k, p + nm * 7.0 * k, p - nm * 7.0 * k]), col)
+			"trash":
+				ci.draw_line(c + Vector2(-14, -11) * k, c + Vector2(14, -11) * k, col, w, true)
+				ci.draw_polyline(PackedVector2Array([c + Vector2(-5, -11) * k, c + Vector2(-5, -16) * k,
+						c + Vector2(5, -16) * k, c + Vector2(5, -11) * k]), col, w, true)
+				ci.draw_polyline(PackedVector2Array([c + Vector2(-10, -6) * k, c + Vector2(-8, 16) * k,
+						c + Vector2(8, 16) * k, c + Vector2(10, -6) * k]), col, w, true)
+			"play":
+				ci.draw_colored_polygon(PackedVector2Array([c + Vector2(-9, -15) * k, c + Vector2(16, 0) * k,
+						c + Vector2(-9, 15) * k]), col)
+			"download":
+				ci.draw_line(c + Vector2(0, -16) * k, c + Vector2(0, 6) * k, col, w, true)
+				ci.draw_polyline(PackedVector2Array([c + Vector2(-9, -2) * k, c + Vector2(0, 8) * k,
+						c + Vector2(9, -2) * k]), col, w, true)
+				ci.draw_polyline(PackedVector2Array([c + Vector2(-14, 12) * k, c + Vector2(-14, 18) * k,
+						c + Vector2(14, 18) * k, c + Vector2(14, 12) * k]), col, w, true)
+			"desktop":
+				ci.draw_rect(Rect2(c + Vector2(-18, -15) * k, Vector2(36, 24) * k), col, false, w)
+				ci.draw_line(c + Vector2(0, 9) * k, c + Vector2(0, 17) * k, col, w, true)
+				ci.draw_line(c + Vector2(-8, 17) * k, c + Vector2(8, 17) * k, col, w, true)
+			"check":
+				ci.draw_polyline(PackedVector2Array([c + Vector2(-12, 0) * k, c + Vector2(-4, 9) * k,
+						c + Vector2(13, -9) * k]), col, 4.0 * k, true)
+			"chevron":
+				ci.draw_polyline(PackedVector2Array([c + Vector2(-5, -10) * k, c + Vector2(5, 0) * k,
+						c + Vector2(-5, 10) * k]), col, 3.6 * k, true)
+			"back":
+				ci.draw_polyline(PackedVector2Array([c + Vector2(5, -11) * k, c + Vector2(-6, 0) * k,
+						c + Vector2(5, 11) * k]), col, 3.8 * k, true)
+			"github":
+				ci.draw_arc(c, 15.0 * k, 0.0, TAU, 32, col, w, true)
+				ci.draw_polyline(PackedVector2Array([c + Vector2(-6, -4) * k, c + Vector2(-10, 0) * k,
+						c + Vector2(-6, 4) * k]), col, w, true)
+				ci.draw_polyline(PackedVector2Array([c + Vector2(6, -4) * k, c + Vector2(10, 0) * k,
+						c + Vector2(6, 4) * k]), col, w, true)
+
+
+class IconBtn extends Control:
+	signal pressed
+	var kind := "refresh"
+	var col := Color("e8ecf1"):
+		set(v):
+			col = v
+			queue_redraw()
+	var spin := false:
+		set(v):
+			spin = v
+			angle = 0.0
+			queue_redraw()
+	var hot := false
+	var angle := 0.0
+
+	func _init(k := "refresh", px := 44) -> void:
+		kind = k
+		custom_minimum_size = Vector2(px, px)
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		mouse_entered.connect(func():
+			hot = true
+			queue_redraw())
+		mouse_exited.connect(func():
+			hot = false
+			queue_redraw())
+
+	func _process(d: float) -> void:
+		if spin:
+			angle += d * 6.0
+			queue_redraw()
+
+	func _gui_input(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+			pressed.emit()
+			accept_event()
+
+	func _draw() -> void:
+		var c := size / 2.0
+		draw_circle(c, minf(size.x, size.y) / 2.0, Color(1, 1, 1, 0.12 if hot else 0.06))
+		draw_set_transform(c, angle if spin else 0.0)
+		Ico.draw_kind(self, kind, Vector2.ZERO, minf(size.x, size.y) / 46.0 * 0.78, col)
+		draw_set_transform(Vector2.ZERO)
+
+
+class Toggle extends Control:
+	signal toggled(on: bool)
+	var on := false
+	var t := 0.0
+
+	func _init() -> void:
+		custom_minimum_size = Vector2(58, 34)
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+
+	func set_on(v: bool) -> void:  # sans émettre de signal
+		on = v
+
+	func _process(d: float) -> void:
+		t = move_toward(t, 1.0 if on else 0.0, d * 9.0)
+		queue_redraw()
+
+	func _gui_input(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+			on = not on
+			toggled.emit(on)
+			accept_event()
+
+	func _draw() -> void:
+		var h := size.y
+		var bg := Color("2a313c").lerp(Color("4de1b4"), t)
+		draw_rect(Rect2(h / 2, 0, size.x - h, h), bg, true)
+		draw_circle(Vector2(h / 2, h / 2), h / 2, bg)
+		draw_circle(Vector2(size.x - h / 2, h / 2), h / 2, bg)
+		draw_circle(Vector2(lerpf(h / 2, size.x - h / 2, t), h / 2 + 1.0), h / 2 - 3, Color(0, 0, 0, 0.25))
+		draw_circle(Vector2(lerpf(h / 2, size.x - h / 2, t), h / 2), h / 2 - 4, Color.WHITE)
+
+
+## Icône d'app : carré arrondi + image (ou lettre colorée), avec halo doux et pastille d'état optionnels.
 class AppIcon extends Control:
 	var tex: Texture2D
 	var letter := "?"
 	var tint := Color("4de1b4")
+	var halo := false
+	var badge := Color(0, 0, 0, 0)
+	var pulse := 0.0
+
+	func _process(d: float) -> void:
+		if halo:
+			pulse = fposmod(pulse + d, TAU)
+			queue_redraw()
 
 	func _draw() -> void:
+		var c := size / 2.0
+		var s := minf(size.x, size.y)
+		var side := s * (0.62 if halo else 1.0)
+		if halo:
+			for i in 4:
+				draw_circle(c, side * 0.5 + 10.0 * (i + 1) + sin(pulse + i) * 2.0, Color(tint, 0.10 - i * 0.022))
 		var sb := StyleBoxFlat.new()
 		sb.bg_color = Color("232a34") if tex != null else tint.darkened(0.35)
-		sb.set_corner_radius_all(int(size.x * 0.22))
+		sb.set_corner_radius_all(int(side * 0.24))
 		sb.anti_aliasing_size = 1.2
-		draw_style_box(sb, Rect2(Vector2.ZERO, size))
+		var r := Rect2(c - Vector2(side, side) / 2.0, Vector2(side, side))
+		draw_style_box(sb, r)
 		if tex != null:
-			var m := size.x * 0.12
-			draw_texture_rect(tex, Rect2(Vector2(m, m), size - Vector2(m, m) * 2.0), false)
+			var m := side * 0.12
+			draw_texture_rect(tex, Rect2(r.position + Vector2(m, m), r.size - Vector2(m, m) * 2.0), false)
 		else:
-			var f := ThemeDB.fallback_font
-			var fs := int(size.x * 0.5)
-			draw_string(f, Vector2(0, size.y / 2.0 + fs * 0.36), letter, HORIZONTAL_ALIGNMENT_CENTER, size.x, fs, Color.WHITE)
+			var fs := int(side * 0.5)
+			draw_string(ThemeDB.fallback_font, Vector2(r.position.x, c.y + fs * 0.36), letter,
+					HORIZONTAL_ALIGNMENT_CENTER, side, fs, Color.WHITE)
+		if badge.a > 0.0:
+			var bp := r.position + Vector2(side, 0) - Vector2(side * 0.08, -side * 0.08)
+			draw_circle(bp, side * 0.14, Color("0e1116"))
+			draw_circle(bp, side * 0.1, badge)
 
 
 class Avatar extends Control:
-	var tex: Texture2D:
+	const SHEET := preload("res://mascot/variants.png")
+	const BODIES := [Color("4de1b4"), Color("ff8fb1"), Color("6aa8ff"), Color("ffa24d"), Color("b58bff"),
+			Color("ffd84d"), Color("ff6b6b"), Color("c9d1da")]
+	var variant := 0:
 		set(v):
-			tex = v
+			variant = v
 			queue_redraw()
-	var letter := "?":
+	var selected := false:
 		set(v):
-			letter = v
+			selected = v
 			queue_redraw()
 	var badge := false:
 		set(v):
 			badge = v
 			queue_redraw()
 
+	func _init() -> void:
+		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+
 	func _draw() -> void:
 		var c := size / 2.0
 		var r := minf(size.x, size.y) / 2.0
-		if tex != null:
-			draw_texture_rect(tex, Rect2(c - Vector2(r, r), Vector2(r, r) * 2.0), false)
-		else:
-			draw_circle(c, r, Color("2fb88f"))
-			var fs := int(r * 1.1)
-			draw_string(ThemeDB.fallback_font, Vector2(0, c.y + fs * 0.36), letter, HORIZONTAL_ALIGNMENT_CENTER, size.x, fs, Color.WHITE)
-		draw_arc(c, r - 0.8, 0.0, TAU, 48, Color(1, 1, 1, 0.14), 1.5, true)
+		draw_circle(c, r, (BODIES[variant] as Color).darkened(0.62))
+		var s := int(r * 2.0 * 0.86 / 32.0) * 32
+		s = maxi(s, 32)
+		draw_texture_rect_region(SHEET, Rect2((c - Vector2(s, s) / 2.0).round(), Vector2(s, s)), Rect2(variant * 32, 0, 32, 32))
+		draw_arc(c, r - 1.5, 0.0, TAU, 48, Color("4de1b4") if selected else Color(1, 1, 1, 0.12), 3.0 if selected else 1.5, true)
 		if badge:
 			draw_circle(c + Vector2(r * 0.72, -r * 0.72), r * 0.27, Color("ff6b6b"))
 
 
-# ------------------------------------------------------------------ Démarrage
+# ------------------------------------------------------------------ État
+
+var pseudo := ""
+var avatar_id := 0
+var installed := {}  # repo -> {tag, exe, desk}
+var apps: Array = []  # {name, org, repo, release, asset, icon, manifest}
+var busy := false
+var checking := false
+var cur_app: Dictionary = {}
+
+var col: VBoxContainer
+var orb: Orb
+var home_status: Label
+var page_home: VBoxContainer
+var list_box: VBoxContainer
+var page_detail: VBoxContainer
+var page_profile: VBoxContainer
+var status: Label
+var progress: ProgressBar
+var chip_avatar: Avatar
+var chip_name: Label
+var chk_btn: IconBtn
+var prof_avatar: Avatar
+var pseudo_edit: LineEdit
+var pickers: Array = []
+var upd_lbl: Label
+var upd_btn: Button
+var upd_info := {}
+var upd_http: HTTPRequest
+var home_anim := "wait"
+
 
 func _ready() -> void:
 	_load_state()
-	_load_avatar()
 	_build_ui()
 	_refresh_account()
-	_show_list()
+	_show_home()
 	refresh()
 	_check_update()
 
+
+func _process(_d: float) -> void:
+	orb.anim = home_anim
+	orb.color = orb.color.lerp({"wait": C_WARN, "idle": C_OK, "happy": C_OK, "off": Color("5b6573"),
+			"sad": Color("ff6b6b")}[home_anim], 0.1)
+
+
+# ------------------------------------------------------------------ Thème
 
 func _style(bg: Color, rad := 14, pad := 14) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
@@ -126,20 +329,19 @@ func _make_theme() -> Theme:
 	var th := Theme.new()
 	th.default_font_size = 16
 	th.set_color("font_color", "Label", C_TEXT)
-	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_disabled_color"]:
-		th.set_color(c, "Button", C_TEXT if c != "font_disabled_color" else C_DIM)
+	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		th.set_color(c, "Button", C_TEXT)
+	th.set_color("font_disabled_color", "Button", C_DIM)
 	for st in ["normal", "hover", "pressed", "focus", "disabled"]:
-		var sb := _style(Color("232a34") if st != "hover" else Color("2c3541"), 12, 12)
-		if st == "focus":
-			sb.bg_color = Color("232a34")
+		var sb := _style(Color("232a34") if st != "hover" else Color("2c3541"), 26, 12)
+		sb.content_margin_left = 20
+		sb.content_margin_right = 20
 		th.set_stylebox(st, "Button", sb)
-	th.set_stylebox("normal", "LineEdit", _style(Color("232a34"), 10, 10))
-	th.set_stylebox("focus", "LineEdit", _style(Color("232a34"), 10, 10))
+	for st in ["normal", "focus"]:
+		th.set_stylebox(st, "LineEdit", _style(Color("232a34"), 14, 12))
 	th.set_color("font_color", "LineEdit", C_TEXT)
-	var bgp := _style(Color("232a34"), 5, 0)
-	var fill := _style(C_OK, 5, 0)
-	th.set_stylebox("background", "ProgressBar", bgp)
-	th.set_stylebox("fill", "ProgressBar", fill)
+	th.set_stylebox("background", "ProgressBar", _style(Color("232a34"), 5, 0))
+	th.set_stylebox("fill", "ProgressBar", _style(C_OK, 5, 0))
 	th.set_stylebox("focus", "ScrollContainer", StyleBoxEmpty.new())
 	var sg := _style(Color(1, 1, 1, 0.18), 3, 0)
 	sg.content_margin_left = 6
@@ -147,9 +349,8 @@ func _make_theme() -> Theme:
 	for n in ["grabber", "grabber_highlight", "grabber_pressed"]:
 		th.set_stylebox(n, "VScrollBar", sg)
 		th.set_stylebox(n, "HScrollBar", sg)
-	var sc := StyleBoxEmpty.new()
-	th.set_stylebox("scroll", "VScrollBar", sc)
-	th.set_stylebox("scroll", "HScrollBar", sc)
+	th.set_stylebox("scroll", "VScrollBar", StyleBoxEmpty.new())
+	th.set_stylebox("scroll", "HScrollBar", StyleBoxEmpty.new())
 	return th
 
 
@@ -163,36 +364,71 @@ func _label(text: String, size: int, color: Color, parent: Control) -> Label:
 	return l
 
 
+func _pill(parent: Control, text: String, color: Color) -> Label:
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", _style(Color(color, 0.14), 14, 4))
+	(p.get_theme_stylebox("panel") as StyleBoxFlat).content_margin_left = 12
+	(p.get_theme_stylebox("panel") as StyleBoxFlat).content_margin_right = 12
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent.add_child(p)
+	var l := _label(text, 13, color, p)
+	l.autowrap_mode = TextServer.AUTOWRAP_OFF
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return l
+
+
+func _card(parent: Control, pad := 18) -> VBoxContainer:
+	var p := PanelContainer.new()
+	p.add_theme_stylebox_override("panel", _style(C_CARD, 22, pad))
+	parent.add_child(p)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 12)
+	p.add_child(v)
+	return v
+
+
+# ------------------------------------------------------------------ Interface
+
 func _build_ui() -> void:
 	theme = _make_theme()
 	var bg := ColorRect.new()
 	bg.color = C_BG
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
-	var margin := MarginContainer.new()
-	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
-	for s in ["left", "right", "top", "bottom"]:
-		margin.add_theme_constant_override("margin_" + s, 20)
-	add_child(margin)
 	var scroll := ScrollContainer.new()
+	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	margin.add_child(scroll)
+	add_child(scroll)
+	var margin := MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for s in ["left", "right"]:
+		margin.add_theme_constant_override("margin_" + s, 18)
+	margin.add_theme_constant_override("margin_top", 20)
+	margin.add_theme_constant_override("margin_bottom", 24)
+	scroll.add_child(margin)
 	var center := CenterContainer.new()
 	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(center)
+	margin.add_child(center)
 	col = VBoxContainer.new()
-	col.add_theme_constant_override("separation", 14)
+	col.add_theme_constant_override("separation", 16)
 	center.add_child(col)
 	get_viewport().size_changed.connect(_fit_width)
 	_fit_width()
 
-	var th := HBoxContainer.new()
-	col.add_child(th)
-	var title := _label("Goodview Software", 30, C_TEXT, th)
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	# en-tête : vérifier les mises à jour + compte
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 10)
+	col.add_child(head)
+	var sp := Control.new()
+	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(sp)
+	chk_btn = IconBtn.new("refresh", 44)
+	chk_btn.tooltip_text = "Vérifier les mises à jour"
+	chk_btn.pressed.connect(check_all)
+	chk_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(chk_btn)
 	var chip := PanelContainer.new()
-	chip.add_theme_stylebox_override("panel", _style(C_CARD, 26, 6))
+	chip.add_theme_stylebox_override("panel", _style(C_CARD, 26, 5))
 	chip.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	chip.gui_input.connect(func(e: InputEvent):
 		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
@@ -202,40 +438,38 @@ func _build_ui() -> void:
 	ch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	chip.add_child(ch)
 	chip_avatar = Avatar.new()
-	chip_avatar.custom_minimum_size = Vector2(38, 38)
+	chip_avatar.custom_minimum_size = Vector2(36, 36)
 	chip_avatar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ch.add_child(chip_avatar)
 	chip_name = _label("", 16, C_TEXT, ch)
 	chip_name.autowrap_mode = TextServer.AUTOWRAP_OFF
 	chip_name.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	chip_name.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	chip_name.add_theme_constant_override("margin_right", 6)
-	th.add_child(chip)
+	head.add_child(chip)
 
-	page_list = VBoxContainer.new()
-	page_list.add_theme_constant_override("separation", 12)
-	col.add_child(page_list)
+	# accueil : mascotte + liste groupée
+	page_home = VBoxContainer.new()
+	page_home.add_theme_constant_override("separation", 14)
+	col.add_child(page_home)
+	orb = Orb.new()
+	orb.custom_minimum_size = Vector2(0, 210)
+	page_home.add_child(orb)
+	home_status = _label("", 22, C_TEXT, page_home)
+	home_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var group := PanelContainer.new()
+	group.add_theme_stylebox_override("panel", _style(C_CARD, 24, 8))
+	page_home.add_child(group)
 	list_box = VBoxContainer.new()
-	list_box.add_theme_constant_override("separation", 10)
-	page_list.add_child(list_box)
+	list_box.add_theme_constant_override("separation", 0)
+	group.add_child(list_box)
 
 	page_detail = VBoxContainer.new()
 	page_detail.add_theme_constant_override("separation", 16)
 	col.add_child(page_detail)
-
 	page_profile = VBoxContainer.new()
 	page_profile.add_theme_constant_override("separation", 18)
-	page_profile.visible = false
 	col.add_child(page_profile)
 	_build_profile()
-
-	file_dlg = FileDialog.new()
-	file_dlg.file_mode = FileDialog.FILE_MODE_OPEN_FILE
-	file_dlg.access = FileDialog.ACCESS_FILESYSTEM
-	file_dlg.use_native_dialog = true
-	file_dlg.filters = PackedStringArray(["*.png, *.jpg, *.jpeg, *.webp ; Images"])
-	file_dlg.file_selected.connect(_set_avatar)
-	add_child(file_dlg)
 
 	progress = ProgressBar.new()
 	progress.show_percentage = false
@@ -243,192 +477,104 @@ func _build_ui() -> void:
 	progress.visible = false
 	col.add_child(progress)
 	status = _label("", 14, C_DIM, col)
-
-
-func _build_profile() -> void:
-	var back := Button.new()
-	back.text = "‹  Catalogue"
-	back.flat = true
-	back.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	back.pressed.connect(func():
-		_commit_profile()
-		_show_list())
-	page_profile.add_child(back)
-	var top := VBoxContainer.new()
-	top.alignment = BoxContainer.ALIGNMENT_CENTER
-	top.add_theme_constant_override("separation", 14)
-	page_profile.add_child(top)
-	prof_avatar = Avatar.new()
-	prof_avatar.custom_minimum_size = Vector2(140, 140)
-	prof_avatar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	prof_avatar.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	prof_avatar.gui_input.connect(func(e: InputEvent):
-		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
-			file_dlg.popup_centered_ratio(0.6))
-	top.add_child(prof_avatar)
-	var pb := Button.new()
-	pb.text = "Changer l'image"
-	pb.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	pb.pressed.connect(func(): file_dlg.popup_centered_ratio(0.6))
-	top.add_child(pb)
-	pseudo_edit = LineEdit.new()
-	pseudo_edit.placeholder_text = "Pseudo"
-	pseudo_edit.max_length = 24
-	pseudo_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
-	pseudo_edit.add_theme_font_size_override("font_size", 22)
-	pseudo_edit.custom_minimum_size = Vector2(300, 52)
-	pseudo_edit.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	pseudo_edit.text_submitted.connect(func(_t: String): _commit_profile())
-	pseudo_edit.focus_exited.connect(_commit_profile)
-	top.add_child(pseudo_edit)
-
-	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", _style(C_CARD, 18, 16))
-	page_profile.add_child(card)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 12)
-	card.add_child(v)
-	var vr := HBoxContainer.new()
-	v.add_child(vr)
-	upd_lbl = _label("v" + VERSION, 15, C_DIM, vr)
-	upd_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	upd_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	upd_btn = Button.new()
-	upd_btn.visible = false
-	upd_btn.pressed.connect(_do_update)
-	vr.add_child(upd_btn)
-	token_edit = LineEdit.new()
-	token_edit.placeholder_text = "Token GitHub (repos privés)"
-	token_edit.secret = true
-	token_edit.text = token
-	token_edit.custom_minimum_size = Vector2(0, 46)
-	token_edit.text_submitted.connect(func(_t: String): _commit_profile())
-	token_edit.focus_exited.connect(_commit_profile)
-	v.add_child(token_edit)
-
-
-func _commit_profile() -> void:
-	var np := pseudo_edit.text.strip_edges()
-	var nt := token_edit.text.strip_edges()
-	var retoken := nt != token
-	if np != "":
-		pseudo = np
-	token = nt
-	_save_state()
-	_refresh_account()
-	if retoken:
-		refresh()
-
-
-func _refresh_account() -> void:
-	if pseudo == "":
-		var u := OS.get_environment("USER").capitalize()
-		pseudo = u if u != "" else "Invité"
-	chip_name.text = pseudo
-	for a in [chip_avatar, prof_avatar]:
-		if a != null:
-			a.tex = avatar_tex
-			a.letter = pseudo.substr(0, 1).to_upper()
-	if pseudo_edit != null:
-		pseudo_edit.text = pseudo
-
-
-func _load_avatar() -> void:
-	var path := ProjectSettings.globalize_path("user://avatar.png")
-	if not FileAccess.file_exists(path):
-		return
-	var im := Image.load_from_file(path)
-	if im == null:
-		return
-	im.convert(Image.FORMAT_RGBA8)
-	im.resize(128, 128, Image.INTERPOLATE_LANCZOS)
-	for y in 128:
-		for x in 128:
-			if Vector2(x - 63.5, y - 63.5).length() > 64.0:
-				im.set_pixel(x, y, Color(0, 0, 0, 0))
-	avatar_tex = ImageTexture.create_from_image(im)
-
-
-func _set_avatar(path: String) -> void:
-	var im := Image.load_from_file(path)
-	if im == null:
-		status.text = "Image illisible."
-		return
-	var side := mini(im.get_width(), im.get_height())
-	im = im.get_region(Rect2i((im.get_width() - side) / 2, (im.get_height() - side) / 2, side, side))
-	im.resize(256, 256, Image.INTERPOLATE_LANCZOS)
-	im.save_png(ProjectSettings.globalize_path("user://avatar.png"))
-	_load_avatar()
-	_refresh_account()
-
-
-func _show_profile() -> void:
-	cur_app = {}
-	page_list.visible = false
-	page_detail.visible = false
-	page_profile.visible = true
-	_refresh_account()
+	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
 
 func _fit_width() -> void:
 	if col != null:
-		col.custom_minimum_size.x = clampf(get_viewport_rect().size.x - 44.0, 300.0, 780.0)
+		col.custom_minimum_size.x = clampf(get_viewport_rect().size.x - 36.0, 300.0, 640.0)
 
 
-func _show_list() -> void:
+func _show_home() -> void:
 	cur_app = {}
-	page_list.visible = true
+	page_home.visible = true
 	page_detail.visible = false
 	page_profile.visible = false
+	chk_btn.visible = true
 	_render_list()
 
 
-# ------------------------------------------------------------------ Catalogue
+func _show_profile() -> void:
+	cur_app = {}
+	page_home.visible = false
+	page_detail.visible = false
+	page_profile.visible = true
+	chk_btn.visible = false
+	_refresh_account()
+
+
+func _show_detail(a: Dictionary) -> void:
+	cur_app = a
+	page_home.visible = false
+	page_profile.visible = false
+	page_detail.visible = true
+	chk_btn.visible = false
+	_render_detail()
+
+
+# ------------------------------------------------------------------ Accueil
 
 func _render_list() -> void:
 	for c in list_box.get_children():
 		c.queue_free()
-	for a in apps:
-		list_box.add_child(_card(a))
+	for i in apps.size():
+		if i > 0:
+			var sep := ColorRect.new()
+			sep.color = Color(1, 1, 1, 0.06)
+			sep.custom_minimum_size = Vector2(0, 1)
+			list_box.add_child(sep)
+		list_box.add_child(_row(apps[i]))
 
 
-func _card(a: Dictionary) -> Control:
+func _row(a: Dictionary) -> Control:
 	var p := PanelContainer.new()
-	var sb := _style(C_CARD, 18, 14)
+	var sb := _style(Color(0, 0, 0, 0), 16, 12)
 	p.add_theme_stylebox_override("panel", sb)
 	p.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	p.mouse_entered.connect(func(): sb.bg_color = C_CARD_HI)
-	p.mouse_exited.connect(func(): sb.bg_color = C_CARD)
+	p.mouse_entered.connect(func(): sb.bg_color = Color(1, 1, 1, 0.05))
+	p.mouse_exited.connect(func(): sb.bg_color = Color(0, 0, 0, 0))
 	p.gui_input.connect(func(e: InputEvent):
 		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
 			_show_detail(a))
 	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 16)
+	h.add_theme_constant_override("separation", 14)
 	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	p.add_child(h)
-	h.add_child(_icon(a, 72))
+	h.add_child(_icon(a, 56, false))
 	var v := VBoxContainer.new()
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	v.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	v.add_theme_constant_override("separation", 3)
+	v.add_theme_constant_override("separation", 2)
 	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	h.add_child(v)
-	_label(_title(a), 20, C_TEXT, v)
-	_label(_tagline(a), 14, C_DIM, v)
-	var st := _label(_state_text(a), 13, C_OK if _is_installed(a) else C_DIM, v)
-	st.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	for c in v.get_children():
-		c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_label(_title(a), 18, C_TEXT, v).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var tl := _label(_tagline(a), 13, C_DIM, v)
+	tl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tl.autowrap_mode = TextServer.AUTOWRAP_OFF
+	tl.clip_text = true
+	var s := _state(a)
+	var pill_box := HBoxContainer.new()
+	pill_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	pill_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_child(pill_box)
+	_pill(pill_box, s[0], s[1])
+	var ch := Control.new()
+	ch.custom_minimum_size = Vector2(22, 22)
+	ch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	ch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ch.draw.connect(func(): Ico.draw_kind(ch, "chevron", ch.size / 2.0, 0.5, C_DIM))
+	h.add_child(ch)
 	return p
 
 
-func _icon(a: Dictionary, px: int) -> AppIcon:
+func _icon(a: Dictionary, px: int, halo: bool) -> AppIcon:
 	var ic := AppIcon.new()
 	ic.custom_minimum_size = Vector2(px, px)
 	ic.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	ic.tex = a.get("icon")
 	ic.letter = str(a.name).substr(0, 1).to_upper()
 	ic.tint = Color.from_hsv(float(str(a.name).hash() % 360) / 360.0, 0.55, 0.9)
+	ic.halo = halo
 	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return ic
 
@@ -446,112 +592,154 @@ func _tag(a: Dictionary) -> String:
 	return str(a.release.get("tag_name", ""))
 
 
-func _is_installed(a: Dictionary) -> bool:
-	return installed.has(a.name)
-
-
-func _state_text(a: Dictionary) -> String:
+## [texte, couleur] de la pastille d'état
+func _state(a: Dictionary) -> Array:
 	var tag := _tag(a)
 	if tag == "":
-		return "Bientôt disponible"
-	if not _is_installed(a):
-		return tag
+		return ["Bientôt", C_DIM]
+	if not installed.has(a.name):
+		return [tag, C_DIM]
 	if installed[a.name].tag == tag:
-		return "Installée · à jour"
-	return "Mise à jour disponible · %s" % tag
+		return ["Installée", C_OK]
+	return ["Mise à jour", C_WARN]
 
 
-# ------------------------------------------------------------------ Page de présentation
+func _update_home_state() -> void:
+	if apps.is_empty():
+		home_anim = "off"
+		home_status.text = "Aucune app"
+		return
+	var upd := 0
+	var inst := 0
+	for a in apps:
+		if installed.has(a.name):
+			inst += 1
+			if installed[a.name].tag != _tag(a):
+				upd += 1
+	if upd > 0:
+		home_anim = "happy"
+		home_status.text = "%d mise%s à jour" % [upd, "s" if upd > 1 else ""]
+	else:
+		home_anim = "idle"
+		home_status.text = "%d app%s" % [apps.size(), "s" if apps.size() > 1 else ""]
 
-func _show_detail(a: Dictionary) -> void:
-	cur_app = a
-	page_list.visible = false
-	page_profile.visible = false
-	page_detail.visible = true
-	_render_detail()
-	DisplayServer.window_set_title(_title(a) + " · Goodview Launcher")
 
+# ------------------------------------------------------------------ Fiche d'app
 
 func _render_detail() -> void:
 	var a := cur_app
 	for c in page_detail.get_children():
 		c.queue_free()
-	var back := Button.new()
-	back.text = "‹  Catalogue"
-	back.flat = true
-	back.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	back.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	back.pressed.connect(func():
-		DisplayServer.window_set_title("Goodview Launcher")
-		_show_list())
-	page_detail.add_child(back)
-
-	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 20)
-	page_detail.add_child(head)
-	head.add_child(_icon(a, 120))
-	var v := VBoxContainer.new()
-	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	v.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	v.add_theme_constant_override("separation", 6)
-	head.add_child(v)
-	_label(_title(a), 32, C_TEXT, v)
-	_label(_tagline(a), 16, C_DIM, v)
-	var meta := PackedStringArray()
-	if _tag(a) != "":
-		meta.append(_tag(a))
-	if not a.asset.is_empty():
-		meta.append("%.0f Mo" % (float(a.asset.get("size", 0)) / 1048576.0))
-	var d := str(a.release.get("published_at", "")).substr(0, 10)
-	if d != "":
-		meta.append(d)
-	_label("  ·  ".join(meta), 13, C_DIM, v)
-
-	# actions
-	var act := HBoxContainer.new()
-	act.add_theme_constant_override("separation", 10)
-	page_detail.add_child(act)
 	var tag := _tag(a)
 	var inst: Dictionary = installed.get(a.name, {})
+
+	var top := HBoxContainer.new()
+	page_detail.add_child(top)
+	var back := IconBtn.new("back", 44)
+	back.tooltip_text = "Catalogue"
+	back.pressed.connect(_show_home)
+	top.add_child(back)
+	var sp := Control.new()
+	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(sp)
+	var gh := IconBtn.new("github", 44)
+	gh.tooltip_text = "Ouvrir sur GitHub"
+	gh.pressed.connect(func(): OS.shell_open("https://github.com/%s/%s" % [a.org, a.name]))
+	top.add_child(gh)
+
+	var ic := _icon(a, 210, true)
+	ic.tint = Color.from_hsv(float(str(a.name).hash() % 360) / 360.0, 0.5, 0.95)
+	var s := _state(a)
+	if installed.has(a.name):
+		ic.badge = s[1]
+	page_detail.add_child(ic)
+
+	var t := _label(_title(a), 28, C_TEXT, page_detail)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var tg := _label(_tagline(a), 15, C_DIM, page_detail)
+	tg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var chips := HBoxContainer.new()
+	chips.alignment = BoxContainer.ALIGNMENT_CENTER
+	chips.add_theme_constant_override("separation", 8)
+	page_detail.add_child(chips)
+	if tag != "":
+		_pill(chips, tag, C_DIM)
+	if not a.asset.is_empty():
+		_pill(chips, "%.0f Mo" % (float(a.asset.get("size", 0)) / 1048576.0), C_DIM)
+	if s[0] != tag:
+		_pill(chips, s[0], s[1])
+
+	# action principale
 	var main := Button.new()
-	main.custom_minimum_size = Vector2(190, 52)
+	main.custom_minimum_size = Vector2(0, 58)
+	main.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	main.custom_minimum_size.x = 260
 	for st in ["normal", "hover", "pressed", "focus"]:
-		var sb := _style(C_OK if st != "hover" else C_OK.lightened(0.15), 14, 12)
+		var sb := _style(C_OK if st != "hover" else C_OK.lightened(0.15), 29, 12)
 		main.add_theme_stylebox_override(st, sb)
 	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
 		main.add_theme_color_override(c, Color("0e1116"))
-	main.add_theme_font_size_override("font_size", 18)
+	main.add_theme_font_size_override("font_size", 19)
+	var can: bool = tag != "" and not a.asset.is_empty()
 	if tag == "":
 		main.text = "Pas encore publiée"
-		main.disabled = true
-		main.add_theme_stylebox_override("disabled", _style(Color("232a34"), 14, 12))
+	elif not can and (inst.is_empty() or inst.tag != tag):
+		main.text = "Pas de version Linux"
 	elif inst.is_empty():
 		main.text = "Installer"
 	elif inst.tag != tag:
 		main.text = "Mettre à jour"
 	else:
 		main.text = "Lancer"
-	if tag != "" and a.asset.is_empty() and (inst.is_empty() or inst.tag != tag):
-		main.text = "Pas de version Linux"
+	if not can and (inst.is_empty() or inst.tag != tag):
 		main.disabled = true
-		main.add_theme_stylebox_override("disabled", _style(Color("232a34"), 14, 12))
+		main.add_theme_stylebox_override("disabled", _style(Color("232a34"), 29, 12))
 	main.pressed.connect(func():
 		if main.text == "Lancer":
 			_launch(a.name)
 		else:
 			install(a))
-	act.add_child(main)
+	page_detail.add_child(main)
+
+	# réglages en icônes (comme Pocket Speaker)
+	var card := _card(page_detail)
+	var r1 := HBoxContainer.new()
+	r1.add_theme_constant_override("separation", 14)
+	card.add_child(r1)
+	var i1 := IconBtn.new("refresh", 44)
+	i1.tooltip_text = "Vérifier les mises à jour de cette app"
+	i1.pressed.connect(func(): check_one(a))
+	r1.add_child(i1)
+	var st1 := _label(_check_text(a), 15, C_DIM, r1)
+	st1.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	st1.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	if not inst.is_empty():
-		var rm := Button.new()
-		rm.text = "Désinstaller"
-		rm.custom_minimum_size = Vector2(0, 52)
-		rm.pressed.connect(func(): _uninstall(a))
-		act.add_child(rm)
-	var gh := Button.new()
-	gh.text = "GitHub"
-	gh.custom_minimum_size = Vector2(0, 52)
-	gh.pressed.connect(func(): OS.shell_open("https://github.com/%s/%s" % [a.org, a.name]))
-	act.add_child(gh)
+		var r2 := HBoxContainer.new()
+		r2.add_theme_constant_override("separation", 14)
+		card.add_child(r2)
+		var i2 := IconBtn.new("desktop", 44)
+		i2.tooltip_text = "Raccourci sur le bureau"
+		i2.col = C_OK if inst.get("desk", false) else C_TEXT
+		r2.add_child(i2)
+		var sp2 := Control.new()
+		sp2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		r2.add_child(sp2)
+		var tg2 := Toggle.new()
+		tg2.set_on(inst.get("desk", false))
+		tg2.tooltip_text = "Raccourci sur le bureau"
+		tg2.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		tg2.toggled.connect(func(on: bool):
+			_set_shortcut(a, on)
+			i2.col = C_OK if on else C_TEXT)
+		r2.add_child(tg2)
+		var r3 := HBoxContainer.new()
+		r3.add_theme_constant_override("separation", 14)
+		card.add_child(r3)
+		var i3 := IconBtn.new("trash", 44)
+		i3.tooltip_text = "Désinstaller"
+		i3.col = Color("ff6b6b")
+		i3.pressed.connect(func(): _uninstall(a))
+		r3.add_child(i3)
 
 	# captures d'écran
 	var shots: Array = a.manifest.get("screenshots", [])
@@ -565,10 +753,7 @@ func _render_detail() -> void:
 		sc.add_child(row)
 		_load_shots(a, shots, row)
 
-	# description
 	var desc := str(a.manifest.get("description", ""))
-	if desc == "":
-		desc = _tagline(a)
 	if desc != "":
 		_section("À propos", desc)
 	var notes := str(a.release.get("body", "")).strip_edges()
@@ -576,13 +761,19 @@ func _render_detail() -> void:
 		_section("Nouveautés · " + tag, notes.left(900))
 
 
+func _check_text(a: Dictionary) -> String:
+	var inst: Dictionary = installed.get(a.name, {})
+	if _tag(a) == "":
+		return "Aucune version publiée"
+	if inst.is_empty():
+		return "Dernière version : " + _tag(a)
+	if inst.tag == _tag(a):
+		return "À jour"
+	return "%s → %s" % [inst.tag, _tag(a)]
+
+
 func _section(title: String, body: String) -> void:
-	var p := PanelContainer.new()
-	p.add_theme_stylebox_override("panel", _style(C_CARD, 18, 18))
-	page_detail.add_child(p)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 8)
-	p.add_child(v)
+	var v := _card(page_detail)
 	_label(title, 18, C_TEXT, v)
 	_label(body, 15, C_DIM, v)
 
@@ -603,13 +794,90 @@ func _load_shots(a: Dictionary, shots: Array, row: HBoxContainer) -> void:
 		row.add_child(tr)
 
 
+# ------------------------------------------------------------------ Profil
+
+func _build_profile() -> void:
+	var top := HBoxContainer.new()
+	page_profile.add_child(top)
+	var back := IconBtn.new("back", 44)
+	back.pressed.connect(func():
+		_commit_profile()
+		_show_home())
+	top.add_child(back)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 14)
+	page_profile.add_child(box)
+	prof_avatar = Avatar.new()
+	prof_avatar.custom_minimum_size = Vector2(140, 140)
+	prof_avatar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	box.add_child(prof_avatar)
+	var pick := HFlowContainer.new()
+	pick.alignment = FlowContainer.ALIGNMENT_CENTER
+	pick.add_theme_constant_override("h_separation", 10)
+	pick.add_theme_constant_override("v_separation", 10)
+	box.add_child(pick)
+	for i in Avatar.BODIES.size():
+		var av := Avatar.new()
+		av.variant = i
+		av.custom_minimum_size = Vector2(64, 64)
+		av.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		av.gui_input.connect(func(e: InputEvent):
+			if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				avatar_id = i
+				_save_state()
+				_refresh_account())
+		pick.add_child(av)
+		pickers.append(av)
+	pseudo_edit = LineEdit.new()
+	pseudo_edit.placeholder_text = "Pseudo"
+	pseudo_edit.max_length = 24
+	pseudo_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pseudo_edit.add_theme_font_size_override("font_size", 22)
+	pseudo_edit.custom_minimum_size = Vector2(300, 54)
+	pseudo_edit.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	pseudo_edit.text_submitted.connect(func(_t: String): _commit_profile())
+	pseudo_edit.focus_exited.connect(_commit_profile)
+	box.add_child(pseudo_edit)
+
+	var card := _card(page_profile)
+	var vr := HBoxContainer.new()
+	card.add_child(vr)
+	upd_lbl = _label("v" + VERSION, 15, C_DIM, vr)
+	upd_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	upd_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	upd_btn = Button.new()
+	upd_btn.visible = false
+	upd_btn.pressed.connect(_do_update)
+	vr.add_child(upd_btn)
+
+
+func _commit_profile() -> void:
+	var np := pseudo_edit.text.strip_edges()
+	if np != "":
+		pseudo = np
+	_save_state()
+	_refresh_account()
+
+
+func _refresh_account() -> void:
+	if pseudo == "":
+		var u := OS.get_environment("USER").capitalize()
+		pseudo = u if u != "" else "Invité"
+	chip_name.text = pseudo
+	for a in [chip_avatar, prof_avatar]:
+		if a != null:
+			a.variant = avatar_id
+	for i in pickers.size():
+		pickers[i].selected = i == avatar_id
+	if pseudo_edit != null:
+		pseudo_edit.text = pseudo
+
+
 # ------------------------------------------------------------------ Réseau
 
 func _headers(binary := false) -> PackedStringArray:
 	var h := PackedStringArray(["User-Agent: goodview-launcher"])
 	h.append("Accept: application/octet-stream" if binary else "Accept: application/vnd.github+json")
-	if token != "":
-		h.append("Authorization: Bearer " + token)
 	return h
 
 
@@ -640,26 +908,31 @@ func _tex(bytes: PackedByteArray, svg := false) -> Texture2D:
 	return ImageTexture.create_from_image(im) if err == OK else null
 
 
+func _fetch_release(a: Dictionary) -> void:
+	var rel = await _get_json("%s/repos/%s/%s/releases/latest" % [API, a.org, a.name])
+	a.release = rel if rel is Dictionary else {}
+	a.asset = _pick_asset(a.release)
+
+
 func refresh() -> void:
 	if busy:
 		return
 	busy = true
 	apps.clear()
 	_render_list()
-	status.text = "Chargement du catalogue…"
+	home_anim = "wait"
+	home_status.text = ""
 	var failed := 0
 	for org in ORGS:
-		var repos = await _get_json("%s/orgs/%s/repos?per_page=100&type=%s" % [API, org, "all" if token != "" else "public"])
+		var repos = await _get_json("%s/orgs/%s/repos?per_page=100&type=%s" % [API, org, "public"])
 		if repos == null or not repos is Array:
 			failed += 1
 			continue
 		for repo in repos:
 			if repo.name in EXCLUDED or repo.get("archived", false):
 				continue
-			var rel = await _get_json("%s/repos/%s/%s/releases/latest" % [API, org, repo.name])
-			var a := {"name": repo.name, "org": org, "repo": repo, "release": rel if rel is Dictionary else {},
-					"asset": {}, "icon": null, "manifest": {}}
-			a.asset = _pick_asset(a.release)
+			var a := {"name": repo.name, "org": org, "repo": repo, "release": {}, "asset": {}, "icon": null, "manifest": {}}
+			await _fetch_release(a)
 			var m: Array = await _get_bytes("%s/%s/%s/HEAD/app.json" % [RAW, org, repo.name])
 			if m[0] == 200:
 				var j = JSON.parse_string((m[1] as PackedByteArray).get_string_from_utf8())
@@ -672,13 +945,38 @@ func refresh() -> void:
 					if a.icon != null:
 						break
 			apps.append(a)
-			if cur_app.is_empty():
-				list_box.add_child(_card(a))
-	if failed == ORGS.size():
-		status.text = "Impossible de lire le catalogue (réseau ou token ?)."
-	else:
-		status.text = "" if apps.size() > 0 else "Aucune application publiée pour l'instant."
+			if page_home.visible:
+				_render_list()
 	busy = false
+	if failed == ORGS.size():
+		home_anim = "sad"
+		home_status.text = "Hors ligne"
+	else:
+		_update_home_state()
+
+
+func check_all() -> void:
+	if checking or busy:
+		return
+	checking = true
+	chk_btn.spin = true
+	home_anim = "wait"
+	for a in apps:
+		await _fetch_release(a)
+	checking = false
+	chk_btn.spin = false
+	_update_home_state()
+	_render_list()
+
+
+func check_one(a: Dictionary) -> void:
+	if checking:
+		return
+	checking = true
+	await _fetch_release(a)
+	checking = false
+	if cur_app == a:
+		_render_detail()
 
 
 # ------------------------------------------------------------------ Installation
@@ -710,11 +1008,10 @@ func install(a: Dictionary) -> void:
 	req.download_file = file
 	req.max_redirects = 8
 	add_child(req)
-	var url: String = asset.url if token != "" else asset.browser_download_url
-	req.request(url, _headers(true) if token != "" else PackedStringArray(["User-Agent: goodview-launcher"]))
+	req.request(str(asset.browser_download_url), PackedStringArray(["User-Agent: goodview-launcher"]))
 	progress.visible = true
 	progress.value = 0
-	status.text = "Téléchargement…"
+	status.text = ""
 	while true:
 		var total := req.get_body_size()
 		if total > 0:
@@ -733,10 +1030,13 @@ func install(a: Dictionary) -> void:
 		status.text = "Aucun exécutable trouvé dans " + str(asset.name)
 		busy = false
 		return
-	installed[name] = {"tag": _tag(a), "exe": exe}
+	var desk: bool = installed.get(name, {}).get("desk", false)
+	installed[name] = {"tag": _tag(a), "exe": exe, "desk": desk}
 	_save_state()
-	status.text = "Installée ✔"
 	busy = false
+	if desk:
+		_set_shortcut(a, true)  # recrée le raccourci (dossier réinstallé)
+	_update_home_state()
 	_render_detail()
 
 
@@ -784,15 +1084,45 @@ func _find_exe(dir: String) -> String:
 func _launch(name: String) -> void:
 	var exe: String = installed[name].exe
 	var pid := OS.create_process(exe, [])
-	status.text = "Lancée." if pid > 0 else "Impossible de lancer " + exe
+	status.text = "" if pid > 0 else "Impossible de lancer " + exe
 
 
 func _uninstall(a: Dictionary) -> void:
+	_set_shortcut(a, false)
 	OS.execute("rm", ["-rf", ProjectSettings.globalize_path(APPS_DIR + "/" + str(a.name))])
 	installed.erase(a.name)
 	_save_state()
-	status.text = ""
+	_update_home_state()
 	_render_detail()
+
+
+## Raccourci bureau (.desktop) pour une app installée.
+func _set_shortcut(a: Dictionary, on: bool) -> void:
+	var name: String = a.name
+	var path := OS.get_system_dir(OS.SYSTEM_DIR_DESKTOP) + "/" + _title(a) + ".desktop"
+	if installed.has(name):
+		installed[name]["desk"] = on
+		_save_state()
+	if not on:
+		DirAccess.remove_absolute(path)
+		return
+	if not installed.has(name):
+		return
+	var exe: String = installed[name].exe
+	var icon_line := ""
+	if a.icon != null:
+		var ip := ProjectSettings.globalize_path(APPS_DIR + "/" + name + "/icon.png")
+		(a.icon as Texture2D).get_image().save_png(ip)
+		icon_line = "Icon=" + ip + "\n"
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		status.text = "Impossible de créer le raccourci."
+		return
+	f.store_string("[Desktop Entry]\nType=Application\nName=%s\nComment=%s\nExec=\"%s\"\nPath=%s\n%sTerminal=false\nCategories=Game;Utility;\n"
+			% [_title(a), _tagline(a), exe, exe.get_base_dir(), icon_line])
+	f.close()
+	OS.execute("chmod", ["+x", path])
+	OS.execute("gio", ["set", path, "metadata::trusted", "true"])
 
 
 # ------------------------------------------------------------------ Persistance
@@ -804,7 +1134,7 @@ func _load_state() -> void:
 			installed = d
 	var cfg := ConfigFile.new()
 	if cfg.load(CFG_FILE) == OK:
-		token = cfg.get_value("github", "token", "")
+		avatar_id = clampi(int(cfg.get_value("profile", "avatar", 0)), 0, 7)
 		pseudo = str(cfg.get_value("profile", "pseudo", ""))
 
 
@@ -813,7 +1143,7 @@ func _save_state() -> void:
 	f.store_string(JSON.stringify(installed))
 	f.close()
 	var cfg := ConfigFile.new()
-	cfg.set_value("github", "token", token)
+	cfg.set_value("profile", "avatar", avatar_id)
 	cfg.set_value("profile", "pseudo", pseudo)
 	cfg.save(CFG_FILE)
 
@@ -821,7 +1151,6 @@ func _save_state() -> void:
 # ------------------------------------------------------------------ Mise à jour du launcher (version.json + .pck)
 
 func _check_update() -> void:
-	upd_lbl.text = "v" + VERSION
 	upd_http = HTTPRequest.new()
 	upd_http.timeout = 10.0
 	add_child(upd_http)
