@@ -23,6 +23,15 @@ const KINDS := {
 	"image": {"label": "Image", "title": "Image", "mode": "libre", "w": 340.0, "h": 380.0,
 		"prompt": "Cette zone contient une image que tu peux voir. Décris-la précisément quand on te le demande, puis réponds aux questions à son sujet."},
 }
+## Types de fils : ce que la zone source apporte à la zone d'arrivée.
+const LINK_ORDER := ["feed", "critique", "compare", "merge"]
+const LINKS := {
+	"feed": ["nourrit", "Contexte et base de travail"],
+	"critique": ["critique", "Contenu à critiquer (points faibles, risques, ce qui manque)"],
+	"compare": ["compare", "Contenus à comparer entre eux (critères explicites)"],
+	"merge": ["fusionne", "Contenus à fusionner en une proposition cohérente (réconcilie les contradictions)"],
+}
+const DEBATE_TURNS := 4
 const MODES := {
 	"libre": ["Libre", ""],
 	"brainstorm": ["Brainstorm", "Mode brainstorm : propose beaucoup d'idées variées et originales, sans les juger, en liste courte."],
@@ -49,6 +58,7 @@ var world: Control
 var imgs := {}  # id de zone image -> {b64, tex}
 var menu: PopupMenu
 var view_menu: PopupMenu
+var _deb := {}  # zones en débat
 var reqs := {}  # id -> Ollama.Req en cours
 var drag_from := ""
 var drag_pos := Vector2.ZERO
@@ -279,7 +289,14 @@ func add_link(a: String, b: String) -> void:
 	for l in links:
 		if l.from == a and l.to == b:
 			return
-	links.append({"from": a, "to": b})
+	links.append({"from": a, "to": b, "type": "feed"})
+	_refresh_all()
+	_touch()
+
+
+func cycle_link(i: int) -> void:
+	var t := str(links[i].get("type", "feed"))
+	links[i]["type"] = LINK_ORDER[(LINK_ORDER.find(t) + 1) % LINK_ORDER.size()]
 	_refresh_all()
 	_touch()
 
@@ -317,30 +334,79 @@ func delete_zone(id: String) -> void:
 
 
 ## Texte reçu par une zone depuis ses zones sources (synthèse si clôturée, sinon fin de la discussion).
+func _src_body(s: Dictionary) -> String:
+	var body := str(s.summary).strip_edges()
+	if not (s.closed and body != ""):
+		var tr: PackedStringArray = []
+		for m in s.msgs:
+			tr.append("%s : %s" % ["Utilisateur" if m.role == "user" else "Assistant", str(m.content)])
+		body = "\n".join(tr)
+		body = body.right(CTX_CAP) if body.length() > CTX_CAP else body
+	return body
+
+
 func incoming_context(id: String) -> String:
-	var parts: PackedStringArray = []
+	var groups := {}
 	for l in links:
 		if l.to != id:
 			continue
 		var s := _zone(str(l.from))
-		if s.is_empty():
-			continue
-		var body := str(s.summary).strip_edges()
-		if not (s.closed and body != ""):
-			var tr: PackedStringArray = []
-			for m in s.msgs:
-				tr.append("%s : %s" % ["Utilisateur" if m.role == "user" else "Assistant", str(m.content)])
-			body = "\n".join(tr)
-			body = body.right(CTX_CAP) if body.length() > CTX_CAP else body
+		var body := _src_body(s) if not s.is_empty() else ""
 		if body != "":
-			parts.append("[Zone « %s »]\n%s" % [str(s.title), body])
-	return "\n\n".join(parts)
+			var t := str(l.get("type", "feed"))
+			groups[t] = str(groups.get(t, "")) + "[Zone « %s »]\n%s\n\n" % [str(s.title), body]
+	var out: PackedStringArray = []
+	for t in LINK_ORDER:
+		if groups.has(t):
+			out.append("### %s\n%s" % [str(LINKS[t][1]), str(groups[t]).strip_edges()])
+	return "\n\n".join(out)
+
+
+## Empreinte du contenu des sources (change quand une source est modifiée) : sert à repérer les zones périmées.
+func incoming_sig(id: String) -> String:
+	var parts: PackedStringArray = []
+	for l in links:
+		if l.to == id:
+			var s := _zone(str(l.from))
+			if not s.is_empty():
+				parts.append(str(_src_body(s).hash()))
+	return ",".join(parts)
+
+
+func is_stale(d: Dictionary) -> bool:
+	return not (d.msgs as Array).is_empty() and str(d.get("fed_sig", "")) != incoming_sig(str(d.id))
+
+
+func has_sources(id: String) -> bool:
+	for l in links:
+		if l.to == id:
+			return true
+	return false
+
+
+## Premier message automatique d'une zone d'après le type de ses fils entrants.
+func run_from_sources(id: String) -> void:
+	var d := _zone(id)
+	var kinds := {}
+	for l in links:
+		if l.to == id:
+			kinds[str(l.get("type", "feed"))] = true
+	var asks: PackedStringArray = []
+	if kinds.has("critique"):
+		asks.append("Critique le contenu des zones liées.")
+	if kinds.has("compare"):
+		asks.append("Compare les contenus des zones liées.")
+	if kinds.has("merge"):
+		asks.append("Fusionne les contenus des zones liées en une proposition cohérente.")
+	if kinds.has("feed") or asks.is_empty():
+		asks.append("Utilise le contexte des zones liées pour avancer sur le sujet de cette zone (« %s »)." % str(d.title))
+	send(id, " ".join(asks))
 
 
 # ------------------------------------------------------------------ Discussion
 
-func _system(d: Dictionary) -> String:
-	var s := U.system_prompt(int(d.ai), false)
+func _system(d: Dictionary, who := -1) -> String:
+	var s := U.system_prompt(int(d.ai) if who < 0 else who, false)
 	s += "\nTu travailles dans une zone d'un plan de réflexion (titre : « %s »). Sois concis." % str(d.title)
 	var kp := str(KINDS[d.kind].prompt)
 	if kp != "":
@@ -354,31 +420,77 @@ func _system(d: Dictionary) -> String:
 	return s
 
 
-func _model(d: Dictionary) -> String:
+func _model(d: Dictionary, who := -1) -> String:
+	var ai_i := int(d.ai) if who < 0 else who
 	if d.kind == "image":
-		var m := ctx.model_for(int(d.ai))
+		var m := ctx.model_for(ai_i)
 		if ctx.model_is_vision(m):
 			return m
 		for x in ctx.models:
 			if ctx.model_is_vision(str(x.name)):
 				return str(x.name)
 		return ""
-	return ctx.model_for(int(d.ai))
+	return ctx.model_for(ai_i)
 
 
 func send(id: String, text: String) -> void:
 	var d := _zone(id)
 	text = text.strip_edges()
-	if d.is_empty() or text == "" or reqs.has(id) or d.closed:
+	if d.is_empty() or text == "" or reqs.has(id) or _deb.has(id) or d.closed:
 		return
 	d.msgs.append({"role": "user", "content": text})
 	d.msgs.append({"role": "assistant", "content": ""})
 	_stream(d, _history(d, d.msgs.size() - 1), func(t: String): d.msgs[d.msgs.size() - 1].content = t)
 
 
+## Débat : l'assistant de la zone et un adversaire alternent (DEBATE_TURNS tours). Rappuyer arrête le débat.
+func debate(id: String) -> void:
+	var d := _zone(id)
+	if d.is_empty() or d.closed:
+		return
+	if _deb.has(id):
+		_deb.erase(id)
+		if reqs.has(id) and reqs[id] != null:
+			(reqs[id] as Ollama.Req).cancel()
+		_refresh_all()
+		return
+	if reqs.has(id):
+		return
+	var a := int(d.ai)
+	var b := int(d.get("ai2", -1))
+	if b < 0 or b == a or b >= U.count():
+		b = (a + 1) % U.count()
+		d["ai2"] = b
+	_deb[id] = true
+	_refresh_all()
+	var topic := str(d.title)
+	for m in d.msgs:
+		if m.role == "user":
+			topic = str(m.content)
+	for r in DEBATE_TURNS:
+		if not _deb.has(id) or not is_instance_valid(self):
+			break
+		var who := a if r % 2 == 0 else b
+		var other := b if who == a else a
+		d.msgs.append({"role": "assistant", "content": "", "ai": who})
+		var idx: int = d.msgs.size() - 1
+		var h := _history(d, idx, who)
+		h[0].content += "\nTu débats avec %s sur le sujet de cette zone. %s Réponds en 4 phrases maximum, directement à son dernier argument, sans répéter." % [
+			str(U.get_u(other).name), "Défends une position claire." if r < 2 else "Cherche maintenant une position commune, ou le point de désaccord décisif."]
+		if h.size() == 1:
+			h.append({"role": "user", "content": topic})
+		elif h[h.size() - 1].role != "user":
+			h.append({"role": "user", "content": "Poursuis le débat."})
+		await _stream(d, h, func(t: String): d.msgs[idx].content = t, who)
+	_deb.erase(id)
+	if is_instance_valid(self):
+		_refresh_all()
+		_touch()
+
+
 func close_zone(id: String) -> void:
 	var d := _zone(id)
-	if d.is_empty() or reqs.has(id):
+	if d.is_empty() or reqs.has(id) or _deb.has(id):
 		return
 	if d.closed:
 		d.closed = false
@@ -398,11 +510,16 @@ func close_zone(id: String) -> void:
 	_stream(d, h, func(t: String): d.summary = t)
 
 
-func _history(d: Dictionary, upto: int) -> Array:
-	var h: Array = [{"role": "system", "content": _system(d)}]
+func _history(d: Dictionary, upto: int, who := -1) -> Array:
+	var cur := int(d.ai) if who < 0 else who
+	var h: Array = [{"role": "system", "content": _system(d, who)}]
 	var from := maxi(0, upto - MAX_HISTORY)
 	for i in range(from, upto):
-		h.append({"role": d.msgs[i].role, "content": d.msgs[i].content})
+		var m: Dictionary = d.msgs[i]
+		if m.role == "assistant" and int(m.get("ai", cur)) != cur:
+			h.append({"role": "user", "content": "[%s] %s" % [str(U.get_u(int(m.ai)).name), str(m.content)]})  # un autre assistant (débat)
+		else:
+			h.append({"role": m.role, "content": m.content})
 	if d.kind == "image" and imgs.has(d.id):
 		for m in h:
 			if m.role == "user":
@@ -411,20 +528,21 @@ func _history(d: Dictionary, upto: int) -> Array:
 	return h
 
 
-func _stream(d: Dictionary, msgs: Array, setter: Callable) -> void:
+func _stream(d: Dictionary, msgs: Array, setter: Callable, who := -1) -> void:
 	var id := str(d.id)
+	d["fed_sig"] = incoming_sig(id)
 	reqs[id] = null  # réservé pendant le chargement des modèles
 	_refresh_all()
 	if ctx.models.is_empty():
 		await _load_models()
 		if not is_instance_valid(self) or not reqs.has(id):
 			return
-	var model := _model(d)
+	var model := _model(d, who)
 	if model == "":
 		setter.call("(Aucun modèle vision installé : installe-en un, par ex. gemma3 ou qwen2.5vl, via Ollama.)" if d.kind == "image" else "(Aucun modèle Ollama disponible : installe-en un depuis l'Assistant IA.)")
 		_finish(id)
 		return
-	var req: Ollama.Req = ctx.ollama.chat(model, msgs, {"temperature": float(U.get_u(int(d.ai)).temp), "num_predict": 700})
+	var req: Ollama.Req = ctx.ollama.chat(model, msgs, {"temperature": float(U.get_u(int(d.ai) if who < 0 else who).temp), "num_predict": 700})
 	reqs[id] = req
 	var acc := [""]
 	_refresh_all()
@@ -441,6 +559,7 @@ func _stream(d: Dictionary, msgs: Array, setter: Callable) -> void:
 		if not ok and kind != "cancel":
 			setter.call(str(acc[0]) + "\n(Erreur : %s)" % Ollama.friendly(kind, msg, model))
 		_finish(id))
+	await req.finished
 
 
 ## Liste les modèles Ollama installés (la page Chat le fait déjà ; le plan doit aussi pouvoir le faire seul).
@@ -459,8 +578,7 @@ func _load_models() -> void:
 
 func _finish(id: String) -> void:
 	reqs.erase(id)
-	if nodes.has(id):
-		(nodes[id] as Zone).refresh()
+	_refresh_all()
 	_touch()
 
 
@@ -654,10 +772,11 @@ class Canvas extends Control:
 			var e := pts[pts.size() - 1]
 			draw_colored_polygon(PackedVector2Array([e, e + Vector2(-12, -7), e + Vector2(-12, 7)]), col)
 			var m := pts[14]
-			draw_circle(m, 8, T.CARD_HI)
-			draw_arc(m, 8, 0, TAU, 16, col, 2.0)
-			draw_line(m + Vector2(-3, -3), m + Vector2(3, 3), T.TEXT, 2.0)
-			draw_line(m + Vector2(-3, 3), m + Vector2(3, -3), T.TEXT, 2.0)
+			var lt := str(board.LINKS[str(l.get("type", "feed"))][0])
+			var br := Rect2(m - Vector2(34, 9), Vector2(68, 18))
+			draw_rect(br, T.CARD_HI)
+			draw_rect(br, col, false, 2.0)
+			draw_string(get_theme_default_font(), Vector2(br.position.x, br.position.y + 13), lt, HORIZONTAL_ALIGNMENT_CENTER, br.size.x, 11, T.TEXT)
 		for d in board.zones:
 			var col2: Color = board.U.color(int(d.ai))
 			var p := port_pos(d)
@@ -674,12 +793,24 @@ class Canvas extends Control:
 					draw_line(pts2[k], pts2[k + 1], Color(c, 0.8), 3.0)
 		if board.zones.size() <= 1:
 			draw_string(get_theme_default_font(), Vector2(14, size.y - 14),
-				"Glisse le rond ● d'une zone vers une autre pour la nourrir de sa synthèse. Fond : déplacer le plan.",
+				"Glisse le rond ● vers une autre zone pour la nourrir. Clic sur un fil : change son type ; clic droit : le supprime.",
 				HORIZONTAL_ALIGNMENT_LEFT, size.x - 28, 12, board.T.DIM)
 
 	func _gui_input(e: InputEvent) -> void:
 		if board == null:
 			return
+		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_RIGHT and e.pressed:
+			# clic droit sur l'étiquette d'un fil : le supprime
+			for i in board.links.size():
+				var l2: Dictionary = board.links[i]
+				var a2: Dictionary = board._zone(str(l2.from))
+				var b2: Dictionary = board._zone(str(l2.to))
+				if a2.is_empty() or b2.is_empty():
+					continue
+				var pts2 := _curve(port_pos(a2), board.w2c(Vector2(float(b2.x), float(b2.y) + float(b2.h) * 0.5)) + Vector2(-4, 0))
+				if Rect2(pts2[14] - Vector2(34, 9), Vector2(68, 18)).has_point(e.position):
+					board.remove_link(i)
+					return
 		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
 			if e.pressed:
 				for d in board.zones:
@@ -694,8 +825,8 @@ class Canvas extends Control:
 					if a.is_empty() or b.is_empty():
 						continue
 					var pts := _curve(port_pos(a), board.w2c(Vector2(float(b.x), float(b.y) + float(b.h) * 0.5)) + Vector2(-4, 0))
-					if pts[14].distance_to(e.position) < 10.0:
-						board.remove_link(i)
+					if Rect2(pts[14] - Vector2(34, 9), Vector2(68, 18)).has_point(e.position):
+						board.cycle_link(i)  # clic : change le type du fil (nourrit / critique / compare / fusionne)
 						return
 				panning = true
 			else:
@@ -730,6 +861,9 @@ class Zone extends PanelContainer:
 	var mode_o: OptionButton
 	var pic: Control
 	var an: Button
+	var launch: Button
+	var deb: Button
+	var who2: OptionButton
 	var input_row: HBoxContainer
 	var input: LineEdit
 	var mode := ""
@@ -801,6 +935,15 @@ class Zone extends PanelContainer:
 			board._touch())
 		mode_o.tooltip_text = "Mode de raisonnement de l'IA dans cette zone"
 		row2.add_child(mode_o)
+		who2 = OptionButton.new()
+		for i in board.U.count():
+			who2.add_item("vs " + str(board.U.get_u(i).name), i)
+		who2.select(int(d.get("ai2", (int(d.ai) + 1) % board.U.count())))
+		who2.tooltip_text = "Adversaire pour le débat"
+		who2.item_selected.connect(func(i: int):
+			d["ai2"] = i
+			board._touch())
+		row2.add_child(who2)
 		info = Label.new()
 		info.add_theme_font_size_override("font_size", 11)
 		info.add_theme_color_override("font_color", board.T.DIM)
@@ -827,6 +970,16 @@ class Zone extends PanelContainer:
 			an.tooltip_text = "Lance l'IA vision sur l'image"
 			an.pressed.connect(func(): board.send(str(d.id), "Analyse cette image : décris ce que tu vois en détail, puis ce qu'on peut en tirer."))
 			input_row.add_child(an)
+		launch = Button.new()
+		launch.text = "Lancer"
+		launch.tooltip_text = "Lance l'IA à partir des zones liées (selon le type de chaque fil)"
+		launch.pressed.connect(func(): board.run_from_sources(str(d.id)))
+		input_row.add_child(launch)
+		deb = Button.new()
+		deb.text = "Débat"
+		deb.tooltip_text = "Fait débattre deux assistants (rappuie pour arrêter)"
+		deb.pressed.connect(func(): board.debate(str(d.id)))
+		input_row.add_child(deb)
 		input = LineEdit.new()
 		input.placeholder_text = "Parle dans cette zone…"
 		input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -861,6 +1014,19 @@ class Zone extends PanelContainer:
 		input_row.visible = not d.closed
 		input.editable = not busy
 		chip.add_theme_color_override("font_color", col)
+		var stale: bool = board.is_stale(d)
+		var debating: bool = board._deb.has(d.id)
+		launch.visible = board.has_sources(str(d.id))
+		launch.text = "Relancer" if stale else "Lancer"
+		launch.disabled = busy
+		deb.text = "Stop" if debating else "Débat"
+		deb.disabled = busy and not debating
+		who2.disabled = busy
+		who2.visible = d.kind != "image"
+		deb.visible = d.kind != "image"
+		if stale:
+			sbx.border_color = board.T.WARN
+			add_theme_stylebox_override("panel", sbx)
 		mode_o.disabled = busy
 		if pic != null:
 			pic.queue_redraw()
@@ -873,8 +1039,8 @@ class Zone extends PanelContainer:
 				var s: Dictionary = board._zone(str(l.from))
 				if not s.is_empty():
 					src.append(str(s.title))
-		info.visible = not src.is_empty()
-		info.text = "↤ nourrie par : " + ", ".join(src) if not src.is_empty() else ""
+		info.visible = not src.is_empty() or stale
+		info.text = ("⚠ sources modifiées depuis la dernière réponse. " if stale else "") + ("↤ nourrie par : " + ", ".join(src) if not src.is_empty() else "")
 		render()
 		queue_redraw()
 
@@ -885,7 +1051,10 @@ class Zone extends PanelContainer:
 			if m.role == "user":
 				out.append("[color=#98a2b0]Toi :[/color] " + board.MD.esc(str(m.content)))
 			else:
-				out.append(board.MD.to_bbcode(str(m.content), accent))
+				var pre := ""
+				if m.has("ai"):
+					pre = "[color=#%s][b]%s :[/b][/color] " % [board.U.color(int(m.ai)).to_html(false), str(board.U.get_u(int(m.ai)).name)]
+				out.append(pre + board.MD.to_bbcode(str(m.content), accent))
 		if d.closed:
 			out.append("[color=#%s][b]— Synthèse —[/b][/color]\n%s" % [accent, board.MD.to_bbcode(str(d.summary), accent)])
 		logv.text = "\n\n".join(out)
