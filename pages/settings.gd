@@ -151,7 +151,8 @@ func build() -> void:
 	qh.add_child(qv)
 	W.label("Launcher sur téléphone", 18, T.TEXT, qv)
 	W.label("Scanne le code pour installer l'APK Android.", 14, T.DIM, qv)
-	var phb := W.IconBtn.new("phone", 56)
+	var phb := W.Btn.new("Télécharger l'APK", "primary")
+	phb.icon = "android"
 	phb.tooltip_text = "Ouvrir le lien de l'APK"
 	phb.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	phb.pressed.connect(func(): OS.shell_open(APK_URL))

@@ -187,7 +187,8 @@ func _content(a: Dictionary) -> void:
 	_history(a)
 	_col = _side
 	_info(a, inst)
-	_apk_card(a)
+	if not OS.has_feature("android"):
+		_apk_card(a)
 	_manage_card(a, status, inst)
 
 
@@ -385,6 +386,17 @@ func _fill_history(a: Dictionary, c: Control, box: VBoxContainer, list: Array) -
 func _main_button(a: Dictionary, status: String) -> Control:
 	var b := W.Btn.new("", "primary")
 	b.set_kind("primary")
+	if OS.has_feature("android"):  # sur téléphone : on ne lance/installe pas de build Linux, on récupère l'APK
+		var apk := Catalog.pick_apk(a.release) if a.get("release") is Dictionary else {}
+		b.icon = "android"
+		if apk.is_empty():
+			b.text = "Pas d'APK publié"
+			b.disabled = true
+		else:
+			b.text = "Télécharger l'APK · " + ctx.fmt_size(float(apk.get("size", 0)))
+			var u := str(apk.browser_download_url)
+			b.pressed.connect(func(): OS.shell_open(u))
+		return b
 	var failed: bool = ctx.installer.errors.has(app_name)
 	match status:
 		"soon":
@@ -483,7 +495,8 @@ func _apk_card(a: Dictionary) -> void:
 	qv.alignment = BoxContainer.ALIGNMENT_CENTER
 	qv.add_theme_constant_override("separation", 12)
 	qh.add_child(qv)
-	var ph := W.IconBtn.new("phone", 64)
+	var ph := W.Btn.new("Télécharger l'APK", "primary")
+	ph.icon = "android"
 	ph.tooltip_text = "Télécharger l'APK (Android)"
 	ph.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	ph.pressed.connect(func(): OS.shell_open(qr_url))
