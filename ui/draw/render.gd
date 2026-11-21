@@ -38,7 +38,6 @@ static func draw_grid(ci: Control, S) -> void:
 	while step * S.zoom * k < 10.0:
 		k *= 4
 	var z: float = S.zoom * k
-	ci.texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
 	ci.draw_set_transform(S.pan, 0.0, Vector2(z, z))
 	var o: Vector2 = -S.pan / z
 	var tl := Vector2(floorf(o.x / step) * step - step, floorf(o.y / step) * step - step)

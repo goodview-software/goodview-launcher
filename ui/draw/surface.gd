@@ -49,6 +49,7 @@ func setup(h: Node) -> void:
 	tools = Tools.new(self)
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	focus_mode = Control.FOCUS_CLICK
+	texture_repeat = CanvasItem.TEXTURE_REPEAT_ENABLED
 	clip_contents = true
 	Geom.font = get_theme_default_font()
 	world = Control.new()

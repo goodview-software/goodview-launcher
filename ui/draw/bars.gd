@@ -37,7 +37,7 @@ func setup(s) -> void:
 	_build_zoombar()
 	S.tool_changed.connect(_mark)
 	S.sel_changed.connect(_mark)
-	S.view_changed.connect(_mark)
+	S.view_changed.connect(_zoom_label)
 	S.scene.changed.connect(_mark)
 	S.resized.connect(layout)
 	layout()
@@ -47,6 +47,14 @@ func setup(s) -> void:
 func _mark() -> void:
 	_dirty = true
 	set_process(true)
+
+
+func _zoom_label() -> void:
+	if zoom_cell != null:
+		var txt := "%d%%" % int(round(S.zoom * 100.0))
+		if (zoom_cell as Cell).a != txt:
+			(zoom_cell as Cell).a = txt
+			zoom_cell.queue_redraw()
 
 
 func _process(_dt: float) -> void:
@@ -284,8 +292,7 @@ func refresh() -> void:
 		if id == "lock":
 			c.a = "lock" if tl.locked else "unlock"
 		c.queue_redraw()
-	(zoom_cell as Cell).a = "%d%%" % int(round(S.zoom * 100.0))
-	zoom_cell.queue_redraw()
+	_zoom_label()
 	(undo_cell as Cell).dim = not S.scene.can_undo()
 	(redo_cell as Cell).dim = not S.scene.can_redo()
 	undo_cell.queue_redraw()
@@ -297,7 +304,7 @@ func refresh() -> void:
 		types[el.type] = true
 	if els.is_empty() and tl.tool in tl.DRAW + ["text"]:
 		types[tl.tool] = true
-	var show: bool = not types.is_empty() and not (types.size() == 1 and types.has("zone"))
+	var show: bool = not types.is_empty()
 	if S.size.x < 720.0:
 		show = show and panel_open
 	panel.visible = show
@@ -316,14 +323,15 @@ func refresh() -> void:
 	_show("font", types.has("text") or shape)
 	_show("layers", not els.is_empty())
 	_show("actions", not els.is_empty())
+	var first: Dictionary = els[0] if not els.is_empty() else {}
 	for ce in _cells:
-		var cur = tl.style_of(str(ce.key))
+		var cur = first.get(str(ce.key), S.scene.style.get(str(ce.key))) if not first.is_empty() else S.scene.style.get(str(ce.key))
 		var v = ce.val
 		var on: bool = (is_equal_approx(float(cur), float(v)) if (cur is float or cur is int) and (v is float or v is int) else cur == v)
 		(ce.c as Cell).sel = on
 		(ce.c as Cell).queue_redraw()
 	_dirty_slider = true
-	_opacity.value = float(tl.style_of("opacity"))
+	_opacity.value = float(first.get("opacity", S.scene.style.get("opacity"))) if not first.is_empty() else float(S.scene.style.get("opacity"))
 	_dirty_slider = false
 	layout()
 

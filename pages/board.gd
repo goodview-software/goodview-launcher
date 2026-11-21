@@ -1072,6 +1072,10 @@ func _fill_help() -> void:
 				if int(count[str(l.to) + "|merge"]) < 2:
 					eff += " [color=#fbbf24]Un seul fil fusionne : ajoute une 2e source vers « %s ».[/color]" % str(b.title)
 		out.append("• [b]« %s » → « %s »[/b] (%s)\n  %s" % [str(a.title), str(b.title), str(LINKS[t][0]), eff])
+	out.append("\n[b][color=#%s]Dessin (comme Excalidraw)[/color][/b]" % acc)
+	out.append("V/1 sélection · H main · R/2 rectangle · D/3 losange · O/4 ellipse · A/5 flèche · L/6 ligne · P/7 crayon · T/8 texte · 9 image · E gomme · F cadre · Q verrou.")
+	out.append("Molette : défiler (Maj : côté) · Ctrl+molette : zoom · Espace+glisser : déplacer · Maj+1 : tout voir · Maj+2 : la sélection.")
+	out.append("Ctrl+Z / Ctrl+Maj+Z annuler/rétablir · Ctrl+D dupliquer (ou Alt+glisser) · Ctrl+G grouper · Ctrl+] / [ ordre · Ctrl+' grille · Ctrl+Maj+E export PNG.")
 	help_txt.text = "\n".join(out)
 
 

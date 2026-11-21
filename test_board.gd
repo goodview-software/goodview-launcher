@@ -267,6 +267,95 @@ func run(test, host_page) -> void:
 	t.check(l1.size() == 1 and l1[0].type == "merge" and l1[0].from == "z1" and l1[0].to == "z2", "migration : fil -> flèche liée typée")
 	t.check(sc.get_el("z2").closed == true, "migration : zone clôturée conservée")
 
+	# --- dessin : exécute tous les chemins de rendu (styles, types, sélection, vue éloignée, surcouche, barres)
+	sc.clear()
+	b._clear_nodes()
+	sc.reset_history()
+	var dn := [0, 0, 0]
+	S.draw.connect(func(): dn[0] += 1)
+	S.front.draw.connect(func(): dn[1] += 1)
+	S.overlay.draw.connect(func(): dn[2] += 1)
+	var zA: Dictionary = b._add_zone("note", "A", Vector2(20, 20))
+	var zB: Dictionary = b._add_zone("ideas", "B", Vector2(500, 20))
+	var k := 0
+	for ty3 in ["rectangle", "diamond", "ellipse"]:
+		for fs3 in ["hachure", "croise", "plein", "aucun"]:
+			var e5 := add(ty3, 40.0 + k * 30, 400.0 + (k % 4) * 90, 120, 70)
+			e5.bg = "60a5fa"
+			e5.fillStyle = fs3
+			e5.strokeStyle = ["plein", "tirets", "points"][k % 3]
+			e5.roughness = k % 3
+			e5.roundness = "sharp" if k % 2 == 0 else "round"
+			e5.angle = 0.3 * (k % 2)
+			e5.label = "lab%d" % k
+			sc.mark(e5)
+			k += 1
+	for at in ["sharp", "round", "elbow"]:
+		var ar: Dictionary = sc.make("arrow", 700, 100.0 + k * 10)
+		ar.arrowType = at
+		ar.startHead = ["none", "arrow", "triangle", "bar", "dot"][k % 5]
+		ar.endHead = ["dot", "bar", "triangle", "arrow", "none"][k % 5]
+		ar.label = "fl"
+		Geom.set_world_pts(ar, PackedVector2Array([Vector2(700, 100 + k * 10), Vector2(900, 160 + k * 10)]))
+		sc.add(ar)
+		Geom.refresh_arrow(sc, ar)
+		k += 1
+	var fr2: Dictionary = sc.make("frame", 0, 0)
+	fr2.w = 900.0
+	fr2.h = 380.0
+	sc.add(fr2, 0)
+	var im2: Dictionary = sc.make("image", 950, 300)
+	im2.w = 100.0
+	im2.h = 70.0
+	sc.add(im2)
+	var tx: Dictionary = sc.make("text", 950, 50)
+	tx.text = "ligne 1\nligne 2"
+	tx.angle = 0.4
+	Geom.fit_text(tx)
+	sc.add(tx)
+	var la: Dictionary = sc.make("arrow", 0, 0)
+	la.start = zA.id
+	la.end = zB.id
+	la.points = [[0.0, 0.0], [10.0, 10.0]]
+	sc.add(la)
+	tl._finish_arrow(la)
+	sc.commit()
+	t.check(str(la.link) == "feed" and b.links().size() == 1, "fil créé par _finish_arrow")
+	for zoom_v in [1.0, 0.3, 2.5]:
+		S.set_view(Vector2(30, 30), zoom_v)
+		sc.select([])
+		for e6 in sc.els:
+			sc.sel = {e6.id: true}
+			tl.hover = str(e6.id)
+			await t.frames(1)
+		sc.select(sc.els.map(func(e7): return e7.id))
+		tl.bind_hover = str(zA.id)
+		tl.guides = [[Vector2(0, 0), Vector2(100, 100)]]
+		tl.erase_set = {str(tx.id): true}
+		await t.frames(2)
+		tl.erase_set = {}
+		tl.guides = []
+		tl.bind_hover = ""
+	for tool_n in ["hand", "rectangle", "arrow", "freedraw", "text", "eraser", "frame", "select"]:
+		tl.set_tool(tool_n)
+		tl.update_cursor(Vector2(100, 100))
+		await t.frames(1)
+	tl.mode = "marquee"
+	tl.marquee = Rect2(10, 10, 200, 100)
+	await t.frames(1)
+	tl.mode = ""
+	S.grid_on = true
+	await t.frames(1)
+	S.grid_on = false
+	S.size = Vector2(400, 600)
+	await t.frames(2)
+	S.size = Vector2(1000, 700)
+	t.check(dn[0] > 0 and dn[1] > 0 and dn[2] > 0, "rendu : couches dessinées (%s)" % str(dn))
+	S.set_view(Vector2.ZERO, 1.0)
+	sc.clear()
+	b._clear_nodes()
+	sc.reset_history()
+
 	# --- performance : 1000 éléments
 	sc.clear()
 	b._clear_nodes()
