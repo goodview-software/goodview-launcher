@@ -2,7 +2,7 @@ extends Control
 ## Goodview Launcher : liste les repos de l'organisation GitHub, installe la
 ## dernière release (asset Linux) dans user://apps/<repo>/ et lance l'app.
 
-const ORG := "goodview-software"
+const ORGS := ["goodview-software", "goodview-soft"]  # nouvelle org + ancienne (apps déjà publiées)
 const API := "https://api.github.com"
 const APPS_DIR := "user://apps"
 const STATE_FILE := "user://installed.json"
@@ -154,21 +154,25 @@ func refresh() -> void:
 	busy = true
 	for c in list_box.get_children():
 		c.queue_free()
-	status.text = "Chargement du catalogue %s…" % ORG
-	var path := "/orgs/%s/repos?per_page=100&type=%s" % [ORG, "all" if token != "" else "public"]
-	var repos = await _get_json(API + path)
-	if repos == null or not repos is Array:
-		status.text = "Impossible de lire l'organisation (réseau ou token ?)."
-		busy = false
-		return
+	status.text = "Chargement du catalogue…"
 	var count := 0
-	for repo in repos:
-		if repo.name in EXCLUDED or repo.get("archived", false):
+	var failed := 0
+	for org in ORGS:
+		var path := "/orgs/%s/repos?per_page=100&type=%s" % [org, "all" if token != "" else "public"]
+		var repos = await _get_json(API + path)
+		if repos == null or not repos is Array:
+			failed += 1
 			continue
-		var rel = await _get_json("%s/repos/%s/%s/releases/latest" % [API, ORG, repo.name])
-		_add_row(repo, rel if rel is Dictionary else {})
-		count += 1
-	status.text = "%d application(s) dans le catalogue." % count if count > 0 else "Aucune application publiée pour l'instant."
+		for repo in repos:
+			if repo.name in EXCLUDED or repo.get("archived", false):
+				continue
+			var rel = await _get_json("%s/repos/%s/%s/releases/latest" % [API, org, repo.name])
+			_add_row(repo, rel if rel is Dictionary else {})
+			count += 1
+	if failed == ORGS.size():
+		status.text = "Impossible de lire le catalogue (réseau ou token ?)."
+	else:
+		status.text = "%d application(s) dans le catalogue." % count if count > 0 else "Aucune application publiée pour l'instant."
 	busy = false
 
 # ---------- Installation ----------
@@ -176,6 +180,8 @@ func _pick_asset(release: Dictionary) -> Dictionary:
 	var best := {}
 	for a in release.get("assets", []):
 		var n: String = a.name.to_lower()
+		if n.ends_with(".apk"):
+			continue
 		if n.contains("linux") or n.ends_with(".x86_64") or n.ends_with(".appimage"):
 			return a
 		if best.is_empty() and not (n.contains("windows") or n.contains("macos") or n.ends_with(".exe")):
