@@ -7,6 +7,9 @@ const U := preload("res://ui/universe.gd")
 const MD := preload("res://ui/markdown.gd")
 const Ollama := preload("res://core/ollama.gd")
 const Attach := preload("res://core/attach.gd")
+const LabTools := preload("res://core/lab_tools.gd")
+const Orchestra := preload("res://core/orchestra.gd")
+const MAX_TOOL_ROUNDS := 4
 const FILE := "user://board.json"  # ancien fichier unique (migré vers le plan 1)
 const PLANS_DIR := "user://boards/"
 const PLANS_INDEX := "user://boards/index.json"
@@ -576,24 +579,55 @@ func _stream(d: Dictionary, msgs: Array, setter: Callable, who := -1) -> void:
 		setter.call("(Aucun modèle vision installé : installe-en un, par ex. gemma3 ou qwen2.5vl, via Ollama.)" if d.kind == "image" else "(Aucun modèle Ollama disponible : installe-en un depuis l'Assistant IA.)")
 		_finish(id)
 		return
-	var req: Ollama.Req = ctx.ollama.chat(model, msgs, {"temperature": float(U.get_u(int(d.ai) if who < 0 else who).temp), "num_predict": 700})
-	reqs[id] = req
-	var acc := [""]
-	_refresh_all()
-	req.line.connect(func(l: Dictionary):
-		var c := str(l.get("message", {}).get("content", ""))
-		if c != "" and is_instance_valid(self):
-			acc[0] += c
-			setter.call(Ollama.strip_think(acc[0]) if "<think>" in acc[0] else acc[0])
-			if nodes.has(id):
-				(nodes[id] as Zone).render())
-	req.finished.connect(func(ok: bool, kind: String, msg: String):
+	var use_tools: bool = bool(d.get("tools", true)) and d.kind != "image" and Ollama.supports_tools(model)
+	if use_tools:
+		msgs[0].content += "\nTu disposes d'outils en lecture seule (fichiers de l'utilisateur, calcul). Utilise-les quand c'est utile, sans les annoncer."
+	var opts := {"temperature": float(U.get_u(int(d.ai) if who < 0 else who).temp), "num_predict": 700}
+	var total := ""  # texte déjà fixé par les tours précédents (outils)
+	for round_i in MAX_TOOL_ROUNDS + 1:
+		var req: Ollama.Req = ctx.ollama.chat(model, msgs, opts, LabTools.schema() if use_tools and round_i < MAX_TOOL_ROUNDS else [])
+		reqs[id] = req
+		var acc := [""]
+		var calls: Array = []
+		_refresh_all()
+		req.line.connect(func(l: Dictionary):
+			var m: Dictionary = l.get("message", {})
+			var c := str(m.get("content", ""))
+			if c != "" and is_instance_valid(self):
+				acc[0] += c
+				var shown: String = Ollama.strip_think(acc[0]) if "<think>" in acc[0] else acc[0]
+				setter.call(total + shown)
+				if nodes.has(id):
+					(nodes[id] as Zone).render()
+			for tc in m.get("tool_calls", []):
+				calls.append(tc))
+		var r: Array = await req.finished
 		if not is_instance_valid(self):
 			return
-		if not ok and kind != "cancel":
-			setter.call(str(acc[0]) + "\n(Erreur : %s)" % Ollama.friendly(kind, msg, model))
-		_finish(id))
-	await req.finished
+		var text: String = Ollama.strip_think(acc[0])
+		if not r[0]:
+			if str(r[1]) != "cancel":
+				setter.call(total + text + "\n(Erreur : %s)" % Ollama.friendly(str(r[1]), str(r[2]), model))
+			break
+		if calls.is_empty() or not reqs.has(id):
+			setter.call(total + text)
+			break
+		# --- exécution des outils puis nouveau tour
+		msgs.append({"role": "assistant", "content": text, "tool_calls": Orchestra.clean_calls(calls)})
+		total += text + ("\n\n" if text.strip_edges() != "" else "")
+		for tc in calls:
+			var f: Dictionary = tc.get("function", {})
+			var nm := str(f.get("name", ""))
+			var args = f.get("arguments", {})
+			if args is String:
+				args = JSON.parse_string(args)
+			if not (args is Dictionary):
+				args = {}
+			var res := LabTools.run(nm, args)
+			total += "> 🔧 %s(%s)\n" % [nm, ", ".join((args as Dictionary).values().map(func(x): return str(x).left(60)))]
+			msgs.append({"role": "tool", "content": res, "tool_name": nm})
+		setter.call(total)
+	_finish(id)
 
 
 ## Liste les modèles Ollama installés (la page Chat le fait déjà ; le plan doit aussi pouvoir le faire seul).
@@ -1116,6 +1150,7 @@ class Zone extends PanelContainer:
 	var launch: Button
 	var deb: Button
 	var who2: OptionButton
+	var tools_c: CheckBox
 	var input_row: HBoxContainer
 	var input: LineEdit
 	var mode := ""
@@ -1187,6 +1222,14 @@ class Zone extends PanelContainer:
 			board._touch())
 		mode_o.tooltip_text = "Mode de raisonnement de l'IA dans cette zone"
 		row2.add_child(mode_o)
+		tools_c = CheckBox.new()
+		tools_c.text = "Outils"
+		tools_c.button_pressed = bool(d.get("tools", true))
+		tools_c.tooltip_text = "Laisse l'IA lire tes fichiers (lecture seule, dossier personnel) et calculer"
+		tools_c.toggled.connect(func(v: bool):
+			d["tools"] = v
+			board._touch())
+		row2.add_child(tools_c)
 		who2 = OptionButton.new()
 		for i in board.U.count():
 			who2.add_item("vs " + str(board.U.get_u(i).name), i)
@@ -1275,6 +1318,7 @@ class Zone extends PanelContainer:
 		deb.disabled = busy and not debating
 		who2.disabled = busy
 		who2.visible = d.kind != "image"
+		tools_c.visible = d.kind != "image"
 		deb.visible = d.kind != "image"
 		if stale:
 			sbx.border_color = board.T.WARN
