@@ -580,7 +580,10 @@ func send(id: String, text: String) -> void:
 		return
 	d.msgs.append({"role": "user", "content": text})
 	d.msgs.append({"role": "assistant", "content": ""})
-	_stream(d, _history(d, d.msgs.size() - 1), func(t: String): d.msgs[d.msgs.size() - 1].content = t)
+	d["sug"] = []
+	await _stream(d, _history(d, d.msgs.size() - 1), func(t: String): d.msgs[d.msgs.size() - 1].content = t)
+	if is_instance_valid(self) and not _zone(id).is_empty() and d.kind != "image":
+		_suggest(d)
 
 
 ## Débat : l'assistant de la zone et un adversaire alternent (DEBATE_TURNS tours). Rappuyer arrête le débat.
@@ -751,6 +754,116 @@ func _finish(id: String) -> void:
 	reqs.erase(id)
 	_refresh_all()
 	_touch()
+
+
+# ------------------------------------------------------------------ Cartes proposées (pistes)
+
+func suggest_on() -> bool:
+	return bool(ctx.store.get_s("lab", "suggest", true))
+
+
+func _cheap_model() -> String:
+	for m in ctx.models:  # triés par taille croissante : le plus léger d'abord
+		var n := str(m.name)
+		if not ctx.model_is_vision(n) and not U.is_broken(n):
+			return n
+	return ""
+
+
+## Après une réponse, demande au plus petit modèle 3 pistes (cartes) pour avancer ; elles s'affichent en boutons sous le chat.
+func _suggest(d: Dictionary) -> void:
+	if not suggest_on() or d.msgs.size() < 2:
+		return
+	var id := str(d.id)
+	var model := _cheap_model()
+	if model == "":
+		return
+	var last_q := ""
+	var last_a := ""
+	for i in range(d.msgs.size() - 1, -1, -1):
+		if last_a == "" and d.msgs[i].role == "assistant":
+			last_a = str(d.msgs[i].content)
+		elif last_a != "" and d.msgs[i].role == "user":
+			last_q = str(d.msgs[i].content)
+			break
+	if last_a.strip_edges() == "" or last_a.begins_with("("):
+		return
+	var sys := "Tu aides à explorer un sujet. Propose 3 cartes (pistes) pour avancer ensuite. Réponds UNIQUEMENT par un tableau JSON de 3 objets {\"titre\": 2 à 4 mots, \"question\": une phrase à poser à une IA pour creuser cette piste, \"type\": un parmi problem, ideas, proscons, decision, note}. Pistes variées (approfondir, comparer, risques, plan d'action…). Aucun autre texte."
+	var msgs: Array = [{"role": "system", "content": sys},
+		{"role": "user", "content": "Zone : %s\nQuestion : %s\nRéponse : %s" % [str(d.title), last_q.left(400), last_a.left(1200)]}]
+	var req: Ollama.Req = ctx.ollama.chat(model, msgs, {"temperature": 0.5, "num_predict": 260}, [], false)
+	var res: Array = await ctx.ollama.collect(req)
+	if not is_instance_valid(self) or _zone(id).is_empty() or not res[0] or res[3].is_empty():
+		return
+	var txt := Ollama.strip_think(str(res[3][0].get("message", {}).get("content", "")))
+	# les petits modèles renvoient tantôt un tableau, tantôt des objets séparés (parfois en blocs ```json) : on extrait chaque {…}
+	var arr: Array = []
+	for m in RegEx.create_from_string("\\{[^{}]*\\}").search_all(txt):
+		var o = JSON.parse_string(m.get_string())
+		if o is Dictionary:
+			arr.append(o)
+	var out: Array = []
+	for it in arr:
+		if it is Dictionary and str(it.get("titre", "")).strip_edges() != "" and str(it.get("question", "")).strip_edges() != "":
+			var k := str(it.get("type", "note"))
+			out.append({"titre": str(it.titre).strip_edges().left(34), "question": str(it.question).strip_edges().left(300), "type": k if KINDS.has(k) and k != "image" else "note"})
+	d["sug"] = out.slice(0, 3)
+	if nodes.has(id):
+		(nodes[id] as Zone).refresh()
+	_touch()
+
+
+## Un fil « nourrit » entre deux zones (flèche liée).
+func link_zones(a: String, b: String, type := "feed") -> void:
+	var za := _zone(a)
+	if za.is_empty() or _zone(b).is_empty():
+		return
+	var el := {"id": scene.uid("l"), "type": "arrow", "x": 0.0, "y": 0.0, "w": 0.0, "h": 0.0, "stroke": zone_color(za).to_html(false), "strokeWidth": 3.0,
+			"arrowType": "round", "start": a, "end": b, "link": type, "endHead": "triangle", "points": [[0.0, 0.0], [10.0, 10.0]]}
+	scene._sanitize(el)
+	scene.add(el)
+	Geom.refresh_arrow(scene, el)
+	scene.mark(el)
+	links_changed()
+
+
+## Crée une carte à droite de la zone (liée par un fil) ; si question != "", l'IA y répond tout de suite.
+func spawn_card(from_id: String, title: String, question: String, kind := "note") -> void:
+	var src := _zone(from_id)
+	if src.is_empty():
+		return
+	var K_: Dictionary = KINDS[kind if KINDS.has(kind) else "note"]
+	var pos := Vector2(float(src.x) + float(src.w) + 120.0, float(src.y))
+	var tries := 0
+	while tries < 12 and _overlaps(pos, Vector2(float(K_.w), float(K_.h))):
+		pos.y += float(K_.h) + 30.0
+		tries += 1
+	var d := _add_zone(kind if KINDS.has(kind) else "note", title, pos)
+	d.ai = int(src.ai)
+	d["mode"] = str(src.get("mode", "libre")) if kind == "note" else d.mode
+	link_zones(from_id, str(d.id))
+	scene.commit()
+	if nodes.has(d.id):
+		(nodes[d.id] as Zone).refresh()
+	if question.strip_edges() != "":
+		send(str(d.id), question)
+
+
+func _overlaps(pos: Vector2, sz: Vector2) -> bool:
+	var r := Rect2(pos, sz).grow(10.0)
+	for z in zones():
+		if r.intersects(Rect2(float(z.x), float(z.y), float(z.w), float(z.h))):
+			return true
+	return false
+
+
+## Pose la question dans une NOUVELLE carte liée (la réponse y arrive).
+func ask_in_card(from_id: String, question: String) -> void:
+	question = question.strip_edges()
+	if question == "":
+		return
+	var t := question.left(30) + ("…" if question.length() > 30 else "")
+	spawn_card(from_id, t, question, "note")
 
 
 # ------------------------------------------------------------------ Images
@@ -982,6 +1095,8 @@ func _build_view_menu() -> void:
 	view_menu.add_item("Tout voir", 0)
 	view_menu.add_item("Rechercher (Ctrl+F)", 2)
 	view_menu.add_item("Exporter en Markdown", 1)
+	view_menu.add_check_item("Pistes de cartes après chaque réponse", 6)
+	view_menu.set_item_checked(view_menu.get_item_index(6), suggest_on())
 	view_menu.add_item("Exporter en PNG (sélection ou tout)", 6)
 	view_menu.add_separator("Plans")
 	for i in plans.size():
@@ -1007,6 +1122,9 @@ func _on_view_menu(i: int) -> void:
 			_rename.popup_centered(Vector2i(320, 110))
 		5:
 			_delete_plan()
+		6:
+			ctx.store.set_s("lab", "suggest", not suggest_on())
+			ctx.store.save_cfg()
 		6:
 			export_png()
 		_:
@@ -1214,6 +1332,7 @@ class Zone extends PanelContainer:
 	var deb: Button
 	var who2: OptionButton
 	var tools_c: CheckBox
+	var chips: HFlowContainer
 	var input_row: HBoxContainer
 	var input: LineEdit
 	var mode := ""
@@ -1320,6 +1439,10 @@ class Zone extends PanelContainer:
 		logv.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		logv.custom_minimum_size.y = 60
 		v.add_child(logv)
+		chips = HFlowContainer.new()
+		chips.add_theme_constant_override("h_separation", 6)
+		chips.add_theme_constant_override("v_separation", 4)
+		v.add_child(chips)
 		input_row = HBoxContainer.new()
 		v.add_child(input_row)
 		if d.kind == "image":
@@ -1352,6 +1475,14 @@ class Zone extends PanelContainer:
 			input.text = ""
 			board.send(str(d.id), t))
 		input_row.add_child(sb)
+		var cb := Button.new()
+		cb.text = "↗"
+		cb.tooltip_text = "Poser la question dans une nouvelle carte liée (la réponse arrive dans la carte)"
+		cb.pressed.connect(func():
+			var t := input.text
+			input.text = ""
+			board.ask_in_card(str(d.id), t))
+		input_row.add_child(cb)
 		hook(title_e, true)
 		for ch in get_children():
 			hook(ch)
@@ -1401,6 +1532,19 @@ class Zone extends PanelContainer:
 				var s: Dictionary = board._zone(str(l.from))
 				if not s.is_empty():
 					src.append(str(s.title))
+		for c in chips.get_children():
+			chips.remove_child(c)
+			c.queue_free()
+		var sugs: Array = d.get("sug", []) if not d.closed and not busy else []
+		chips.visible = not sugs.is_empty()
+		for sg in sugs:
+			var bt := Button.new()
+			bt.text = "＋ " + str(sg.titre)
+			bt.tooltip_text = str(sg.question)
+			bt.pressed.connect(func():
+				d["sug"] = (d.get("sug", []) as Array).filter(func(x): return x != sg)
+				board.spawn_card(str(d.id), str(sg.titre), str(sg.question), str(sg.type)))
+			chips.add_child(bt)
 		info.visible = not src.is_empty() or stale
 		info.text = ("⚠ sources modifiées depuis la dernière réponse. " if stale else "") + ("↤ nourrie par : " + ", ".join(src) if not src.is_empty() else "")
 		render()
