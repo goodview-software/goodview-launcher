@@ -448,7 +448,7 @@ func run_ui() -> void:
 			await frames(2)
 	get_window().size = Vector2i(1100, 720)
 	await frames(2)
-	for p in ["chat_history", "chat_settings", "about", "settings", "profile"]:
+	for p in ["board", "chat_history", "chat_settings", "about", "settings", "profile"]:
 		var pg2: Control = router.push(p)
 		await frames(3)
 		label_check(pg2, p)
@@ -781,7 +781,7 @@ func run_lint(host: Control) -> void:
 	var widths := Lint.T.WIDTHS_TEST if OS.get_environment("GL_LINT_FAST") != "1" else [360, 1100]
 	for n in [0, 1, 7]:
 		ctx.catalog.set_fake(sizes[n])
-		for id in ["home", "chat", "profile", "settings", "about", "welcome", "chat_history", "chat_settings", "app", "kit"]:
+		for id in ["home", "chat", "profile", "settings", "about", "welcome", "board", "chat_history", "chat_settings", "app", "kit"]:
 			if id == "kit" and not Router.PAGES.has("kit"):
 				continue
 			var args := {"name": sizes[n][0].name} if (id == "app" and n > 0) else {}

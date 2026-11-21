@@ -311,6 +311,15 @@ func _assistant_grid() -> Control:
 	c.setup(orb, "Assistant IA", "%s et 7 autres assistants locaux (Ollama)." % u.name, ["Intégré", T.OK], false, false)
 	c.pressed.connect(func(): router.go_tab("chat"))
 	g.add_child(c)
+	var orb2 := W.Orb.new()
+	orb2.variant = (ctx.active + 3) % U.count()
+	orb2.anim = "idle"
+	orb2.set_process(true)
+	var c2 := AppCard.new()
+	c2.btn_text = "Ouvrir"
+	c2.setup(orb2, "Plan IA", "Un plan 2D : des zones où l'on discute avec l'IA, reliées par des fils.", ["Intégré", T.OK], false, false)
+	c2.pressed.connect(func(): router.push("board"))
+	g.add_child(c2)
 	return g
 
 
