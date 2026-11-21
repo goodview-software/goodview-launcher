@@ -2,7 +2,7 @@ extends Control
 ## Goodview Launcher : liste les repos de l'organisation GitHub, installe la
 ## dernière release (asset Linux) dans user://apps/<repo>/ et lance l'app.
 
-const ORGS := ["goodview-software", "goodview-soft"]  # nouvelle org + ancienne (apps déjà publiées)
+const ORGS := ["goodview-software"]
 const API := "https://api.github.com"
 const APPS_DIR := "user://apps"
 const STATE_FILE := "user://installed.json"
