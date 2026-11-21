@@ -200,7 +200,7 @@ func _assistant(ai: int, history: Array, depth: int, chain: Array, sink: int, to
 		# --- délégations (séquentielles)
 		var asst_msg := {"role": "assistant", "content": text}
 		if not text_mode:
-			asst_msg["tool_calls"] = tcalls
+			asst_msg["tool_calls"] = clean_calls(tcalls)
 		msgs.append(asst_msg)
 		var answers: PackedStringArray = []
 		for a in asks:
@@ -222,6 +222,15 @@ func _assistant(ai: int, history: Array, depth: int, chain: Array, sink: int, to
 		if text_mode:
 			msgs.append({"role": "user", "content": "\n".join(answers) + "\nSynthétise maintenant pour l'utilisateur."})
 	return {"text": total, "tokens": tokens}
+
+
+## Ne renvoie à Ollama que name + arguments (l'index relu en nombre flottant fait échouer sa désérialisation).
+static func clean_calls(calls: Array) -> Array:
+	var out: Array = []
+	for tc in calls:
+		var f: Dictionary = tc.get("function", {})
+		out.append({"function": {"name": f.get("name", ""), "arguments": f.get("arguments", {})}})
+	return out
 
 
 func _tools(chain: Array) -> Array:

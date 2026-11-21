@@ -1,5 +1,5 @@
 {
   "name": "Goodview Launcher",
-  "tagline": "Toutes les apps Goodview au même endroit.",
-  "description": "Installe, met à jour et lance les apps de l'organisation Goodview. Favoris, tri, recherche, notes de version, mise à jour de tout en un clic, raccourcis bureau, QR code pour les APK Android, profil partagé (pseudo + mascotte) et mise à jour automatique du launcher."
+  "tagline": "Tes apps Goodview et 8 assistants IA locaux.",
+  "description": "Installe, met à jour et lance les apps Goodview (grille d'apps, favoris, QR Android), avec un chat IA 100 % local (Ollama) : 8 assistants spécialisés qui s'appellent entre eux, chacun avec son univers de couleurs, pièces jointes, historique et profil partagé (pseudo + mascotte + thème)."
 }

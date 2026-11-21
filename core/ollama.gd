@@ -42,9 +42,12 @@ class Req extends RefCounted:
 			return
 		is_done = true
 		http.close()
-		if ok and carry.strip_edges() != "":
-			_emit_lines([carry])
-			carry = ""
+		if ok:
+			carry += raw.get_string_from_utf8()
+			raw = PackedByteArray()
+			if carry.strip_edges() != "":
+				_emit_lines([carry])
+				carry = ""
 		finished.emit(ok, kind, msg)
 
 	func _emit_lines(lines: Array) -> void:
