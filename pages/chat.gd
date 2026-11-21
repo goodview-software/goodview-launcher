@@ -45,8 +45,6 @@ var _draft := ""
 var _chrome: Array = []
 var _comp_c: Control
 var _strip_c: Control
-var _popup: PopupMenu
-var _dialog: FileDialog
 var _tok_t := 0.0
 var _tok_n := 0
 var rate := 0.0  # jetons / seconde (animation)
@@ -68,9 +66,10 @@ func build() -> void:
 		chat = Chats.new_chat(ctx.active, "")
 	# en-tête : modèle, conversations, nouvelle, réglages
 	model_btn = W.Btn.new("", "ghost")
-	model_btn.custom_minimum_size = Vector2(0, 38)
-	model_btn.add_theme_font_size_override("font_size", 14)
+	model_btn.size_name = "sm"
+	model_btn.icon = "bot"
 	model_btn.pressed.connect(_open_models)
+	breakpoint_changed.connect(func(_b): _update_chip())
 	head_right.add_child(model_btn)
 	for d in [["menu", "Conversations", func(): router.push("chat_history")],
 			["plus", "Nouvelle conversation", new_chat],
@@ -80,16 +79,14 @@ func build() -> void:
 		b.pressed.connect(d[2])
 		head_right.add_child(b)
 	# bandeau des assistants (entre l'en-tête et la liste)
-	var sm := MarginContainer.new()
-	sm.add_theme_constant_override("margin_left", 18)
-	sm.add_theme_constant_override("margin_right", 18)
+	var sm: Container = K.Container_.new()
+	sm.max_widths = caps
+	extra_containers.append(sm)
 	_outer.add_child(sm)
 	_outer.move_child(sm, 1)
-	var cc := CenterContainer.new()
-	sm.add_child(cc)
 	strip = ChatUI.Strip.new(chat.assistant)
 	strip.picked.connect(switch_assistant)
-	cc.add_child(strip)
+	sm.add_child(strip)
 	_strip_c = strip
 	_chrome.append(sm)
 	# messages
@@ -98,13 +95,8 @@ func build() -> void:
 	body.add_child(msgs)
 	link(scroll.get_v_scroll_bar().value_changed, _on_scrolled)
 	_build_composer()
-	_fit_width()
 	link(ctx.orchestra.event, _on_event)
 	link(get_window().files_dropped, _on_drop)
-	_popup = PopupMenu.new()
-	_popup.id_pressed.connect(_on_model_menu)
-	add_child(_popup)
-	_chrome.append(_popup)
 	_update_chip()
 	_render_all()
 	if generating:
@@ -114,21 +106,19 @@ func build() -> void:
 
 
 func _build_composer() -> void:
-	var m := MarginContainer.new()
-	m.add_theme_constant_override("margin_left", 18)
-	m.add_theme_constant_override("margin_right", 18)
-	m.add_theme_constant_override("margin_bottom", 10)
+	var m: Container = K.Container_.new()
+	m.max_widths = caps
+	m.pad_v = Tk.S2
+	extra_containers.append(m)
 	_outer.add_child(m)
 	_chrome.append(m)
-	var cc := CenterContainer.new()
-	m.add_child(cc)
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 6)
-	cc.add_child(v)
+	v.add_theme_constant_override("separation", 4)
+	m.add_child(v)
 	_comp_c = v
 	chips = HFlowContainer.new()
 	chips.add_theme_constant_override("h_separation", 8)
-	chips.add_theme_constant_override("v_separation", 6)
+	chips.add_theme_constant_override("v_separation", 4)
 	v.add_child(chips)
 	var h := HBoxContainer.new()
 	h.add_theme_constant_override("separation", 8)
@@ -158,17 +148,6 @@ func _build_composer() -> void:
 	_refresh_attachments()
 	_update_send()
 	_grow()
-
-
-func _fit_width() -> void:
-	super()
-	if body == null:
-		return
-	var w := body.custom_minimum_size.x
-	if _comp_c != null and is_instance_valid(_comp_c):
-		_comp_c.custom_minimum_size.x = w
-	if _strip_c != null and is_instance_valid(_strip_c):
-		_strip_c.custom_minimum_size.x = w
 
 
 func rebuild() -> void:
@@ -216,6 +195,11 @@ func _refresh_models() -> void:
 			ms.append({"name": str(m.get("name", "")), "size": float(m.get("size", 0))})
 		ms.sort_custom(func(a, b): return a.size < b.size)
 		ctx.models = ms
+		ctx.prefetch_caps()
+		if ctx.ollama_version == "":
+			var vr: Array = await ctx.ollama.collect(ctx.ollama.version())
+			if vr[0] and not vr[3].is_empty():
+				ctx.ollama_version = str(vr[3][0].get("version", ""))
 		status = "ready" if not ms.is_empty() else "nomodel"
 	else:
 		status = "offline"
@@ -234,20 +218,22 @@ func _update_chip() -> void:
 	if model_btn == null or not is_instance_valid(model_btn):
 		return
 	var m := current_model()
-	model_btn.text = ("%s%s" % ["" if str(chat.get("model", "")) != "" else "auto · ", m]) if m != "" else "Aucun modèle"
+	model_btn.text = "" if bp == "xs" else (m if m != "" else "Aucun modèle")
 	model_btn.tooltip_text = "Modèle utilisé par " + U.get_u(chat.assistant).name
 
 
 func _open_models() -> void:
-	_popup.clear()
-	_popup.add_item("Auto · %s" % ctx.model_for(chat.assistant), 0)
-	_popup.add_separator()
+	var items: Array = [{"id": "0", "label": "Auto · %s" % ctx.model_for(chat.assistant), "icon": "sparkles"}, {"sep": true}]
 	for i in ctx.models.size():
-		_popup.add_item("%s  (%s)" % [ctx.models[i].name, Ollama.fmt_size(ctx.models[i].size)], i + 1)
-	_popup.add_separator()
-	_popup.add_item("Télécharger un modèle…", 1000)
-	_popup.position = Vector2i(model_btn.get_screen_position() + Vector2(0, model_btn.size.y + 4))
-	_popup.popup()
+		var nm: String = ctx.models[i].name
+		var bad := U.is_broken(nm)
+		items.append({"id": str(i + 1), "label": "%s  (%s)%s" % [nm, Ollama.fmt_size(ctx.models[i].size), " · incompatible" if bad else ""], "icon": "check" if nm == current_model() else "bot", "disabled": bad})
+	items.append({"sep": true})
+	items.append({"id": "1000", "label": "Télécharger un modèle…", "icon": "download"})
+	var m: Control = K.Menu.open(router, items, model_btn.get_global_rect())
+	m.chosen.connect(func(id: String): _on_model_menu(int(id)))
+	if router.instant:
+		m.set_meta("instant", true)
 
 
 func _on_model_menu(id: int) -> void:
@@ -386,13 +372,13 @@ func _render_empty() -> void:
 	var sug: Array = SUGGEST.get(u.id, [])
 	var grid := GridContainer.new()
 	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 10)
-	grid.add_theme_constant_override("v_separation", 10)
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 8)
 	msgs.add_child(grid)
 	for s in sug:
 		var r := W.Row.new()
 		r.sb.bg_color = T.CARD
-		r.add_theme_stylebox_override("panel", T.style(T.CARD, 18, 14))
+		r.add_theme_stylebox_override("panel", T.style(T.CARD,18, 12))
 		r.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		r.pressed.connect(func(): send_text(s))
 		var l := W.label(s, 14, T.TEXT, r)
@@ -423,7 +409,7 @@ func _user_view(i: int, m: Dictionary) -> void:
 	col.add_theme_constant_override("separation", 4)
 	h.add_child(col)
 	var p := PanelContainer.new()
-	p.add_theme_stylebox_override("panel", T.style(Color(T.OK, 0.16), 22, 14))
+	p.add_theme_stylebox_override("panel", T.style(Color(T.OK, 0.16),22, 12))
 	col.add_child(p)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 8)
@@ -465,7 +451,7 @@ func _is_last_user(i: int) -> bool:
 func _assistant_view(i: int, m: Dictionary) -> void:
 	var ai := int(m.get("assistant", chat.assistant))
 	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 10)
+	h.add_theme_constant_override("separation", 8)
 	msgs.add_child(h)
 	var av := W.Avatar.new()
 	av.variant = ai
@@ -474,7 +460,7 @@ func _assistant_view(i: int, m: Dictionary) -> void:
 	h.add_child(av)
 	var col := VBoxContainer.new()
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	col.add_theme_constant_override("separation", 6)
+	col.add_theme_constant_override("separation", 4)
 	h.add_child(col)
 	var nr := HBoxContainer.new()
 	nr.add_theme_constant_override("separation", 8)
@@ -575,7 +561,7 @@ func _make_seg(b: Dictionary) -> Control:
 		r.meta_clicked.connect(func(meta): OS.shell_open(str(meta)))
 		return r
 	var p := PanelContainer.new()
-	p.add_theme_stylebox_override("panel", T.style(T.CARD, 14, 10))
+	p.add_theme_stylebox_override("panel", T.style(T.CARD,14, 8))
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 4)
 	p.add_child(v)
@@ -682,14 +668,9 @@ func _k(n: int) -> String:
 # ------------------------------------------------------------------ Pièces jointes
 
 func _pick_files() -> void:
-	if _dialog == null:
-		_dialog = FileDialog.new()
-		_dialog.use_native_dialog = true
-		_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILES
-		_dialog.access = FileDialog.ACCESS_FILESYSTEM
-		_dialog.files_selected.connect(attach_files)
-		add_child(_dialog)
-	_dialog.popup_centered_ratio(0.6)
+	var fp: Control = K.FilePicker.new()
+	fp.files_selected.connect(attach_files)
+	fp.open_in(router, OS.get_environment("HOME"))
 
 
 func _on_drop(files: PackedStringArray) -> void:
@@ -706,7 +687,7 @@ func attach_files(paths: PackedStringArray) -> void:
 		if a.kind == "bad":
 			ctx.notify("%s : %s" % [a.name, a.error], "error")
 			continue
-		if a.kind == "image" and not U.is_vision(current_model()):
+		if a.kind == "image" and not ctx.model_is_vision(current_model()):
 			ctx.notify("Ce modèle ne lit pas les images : choisis Brume (Ctrl+8) ou un modèle vision.", "error")
 			continue
 		if a.truncated:
@@ -726,10 +707,10 @@ func _refresh_attachments() -> void:
 	for k in attachments.size():
 		var a: Dictionary = attachments[k]
 		var p := PanelContainer.new()
-		p.add_theme_stylebox_override("panel", T.style(T.FIELD, 16, 6))
+		p.add_theme_stylebox_override("panel", T.style(T.FIELD,16, 4))
 		chips.add_child(p)
 		var h := HBoxContainer.new()
-		h.add_theme_constant_override("separation", 6)
+		h.add_theme_constant_override("separation", 4)
 		p.add_child(h)
 		if a.tex != null:
 			var tr := TextureRect.new()
@@ -775,7 +756,7 @@ func send_text(raw: String) -> bool:
 	var images: Array = []
 	for a in attachments:
 		if a.kind == "image":
-			if not U.is_vision(model):
+			if not ctx.model_is_vision(model):
 				ctx.notify("Ce modèle ne lit pas les images : passe à Brume (Ctrl+8) ou choisis un modèle vision.", "error")
 				return false
 			images.append(a.b64)
@@ -931,39 +912,66 @@ func _finish(text: String, tps: float, err: String) -> void:
 
 
 func _show_error(kind: String, msg: String) -> void:
-	var p := PanelContainer.new()
-	p.add_theme_stylebox_override("panel", T.style(Color(T.BAD, 0.12), 18, 14))
-	msgs.add_child(p)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 8)
-	p.add_child(v)
-	var txt := msg
-	match kind:
-		"offline":
-			txt = "Ollama est injoignable. Lance-le puis réessaie."
-		"model_missing":
-			txt = "Modèle absent : " + current_model() + ". Télécharge-le dans les réglages."
-		"timeout":
-			txt = "Délai dépassé : le modèle ne répond plus."
-	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 8)
-	v.add_child(h)
-	var ic := W.IconBtn.new("alert", 32)
-	ic.col = T.BAD
-	ic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var card: PanelContainer = K.Card.new()
+	card.add_theme_stylebox_override("panel", T.style(Color(T.BAD, 0.12), Tk.R_LG, Tk.S4))
+	card.set_meta("k_error", true)
+	msgs.add_child(card)
+	var v := KS.vbox(card, Tk.S3)
+	var model := current_model()
+	var txt := Ollama.friendly(kind, msg, model, ctx.ollama_version)
+	var h := KS.hbox(v, Tk.S3)
+	var ic: Control = K.Icon.make("circle-x", 20, T.BAD)
+	ic.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	h.add_child(ic)
-	W.label(txt, 14, T.BAD, h).size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var b := W.Btn.new("Télécharger" if kind == "model_missing" else "Réessayer", "soft")
-	b.custom_minimum_size = Vector2(0, 40)
-	b.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	b.pressed.connect(func():
-		if kind == "model_missing":
-			router.push("chat_settings")
-		else:
-			p.queue_free()
+	KS.label(h, txt, Tk.FS_SM, T.TEXT, 500, true)
+	var prog: Control = K.Progress.new()
+	prog.visible = false
+	v.add_child(prog)
+	var row: Control = K.Row.new()
+	v.add_child(row)
+	if kind == "model_missing":
+		var dl := K.Btn.make("Télécharger", "primary", "md", "download")
+		dl.pressed.connect(func():
+			dl.loading = true
+			prog.visible = true
+			prog.indeterminate = true
+			var req: Ollama.Req = ctx.ollama.pull(model)
+			req.line.connect(func(d: Dictionary):
+				if d.has("total") and d.has("completed") and float(d.total) > 0.0:
+					prog.indeterminate = false
+					prog.value = float(d.completed) / float(d.total))
+			var r: Array = await req.finished
+			if not is_instance_valid(card):
+				return
+			ctx.notify("%s téléchargé" % model if r[0] else "Téléchargement impossible : " + str(r[2]), "ok" if r[0] else "error")
+			if r[0]:
+				card.queue_free()
+				_refresh_models()
+				regenerate()
+			else:
+				dl.loading = false)
+		row.add_child(dl)
+	else:
+		var rb := K.Btn.make("Réessayer", "primary", "md", "refresh-cw")
+		rb.pressed.connect(func():
+			card.queue_free()
 			regenerate())
-	v.add_child(b)
+		row.add_child(rb)
+	var cb := K.Btn.make("Changer de modèle", "secondary", "md", "bot")
+	cb.pressed.connect(_open_models_from.bind(cb))
+	row.add_child(cb)
 	_scroll_end.call_deferred()
+
+
+func _open_models_from(anchor: Control) -> void:
+	var items: Array = []
+	for i in ctx.models.size():
+		var nm: String = ctx.models[i].name
+		items.append({"id": str(i + 1), "label": nm, "icon": "bot", "disabled": U.is_broken(nm)})
+	items.append({"sep": true})
+	items.append({"id": "1000", "label": "Télécharger un modèle…", "icon": "download"})
+	var m: Control = K.Menu.open(router, items, anchor.get_global_rect())
+	m.chosen.connect(func(id: String): _on_model_menu(int(id)))
 
 
 func _should_title() -> bool:

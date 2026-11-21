@@ -13,10 +13,10 @@ var _banner: VBoxContainer
 var _count: Label
 var _sub: Label
 var _actions: VBoxContainer
-var _search: LineEdit
+var _search: Control
 var _seg: W.Seg
 var _list: VBoxContainer
-var _prog: ProgressBar
+var _prog: Control
 var _prog_lbl: Label
 var query := ""
 var sort_mode := "recent"
@@ -29,44 +29,28 @@ func _init() -> void:
 	max_w = 1120.0
 
 
-func is_wide() -> bool:
-	if force_wide >= 0:
-		return force_wide == 1
-	var w := size.x if size.x > 0.0 else get_viewport_rect().size.x
-	return w >= WIDE_MIN
-
-
-func set_wide(v: bool) -> void:
-	force_wide = 1 if v else 0
-	_fit_width()
-
-
-func _fit_width() -> void:
-	super()
-	if body != null and is_inside_tree() and is_wide() != _wide:
-		rebuild()
+func set_wide(_v: bool) -> void:
+	pass  # la mise en page suit la largeur (KSplit / KAdaptiveGrid)
 
 
 func build() -> void:
 	set_title("Goodview")
-	_wide = is_wide()
 	sort_mode = str(ctx.store.get_s("ui", "sort", "recent"))
 	var gear := W.IconBtn.new("gear", 44)
 	gear.tooltip_text = "Paramètres"
 	gear.pressed.connect(func(): router.push("settings"))
 	head_right.add_child(gear)
 
-	var lay: BoxContainer = HBoxContainer.new() if _wide else VBoxContainer.new()
-	lay.add_theme_constant_override("separation", 28 if _wide else 18)
+	var lay: Container = K.Split.new()
+	lay.side_first = true
+	lay.side_width = 290
+	lay.wide_at = 760
 	body.add_child(lay)
 	var side := VBoxContainer.new()
-	side.add_theme_constant_override("separation", 12)
-	if _wide:
-		side.custom_minimum_size = Vector2(290, 0)
-		side.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	side.add_theme_constant_override("separation", Tk.S3)
 	lay.add_child(side)
 	var tr := HBoxContainer.new()
-	tr.add_theme_constant_override("separation", 10)
+	tr.add_theme_constant_override("separation", Tk.S3)
 	side.add_child(tr)
 	var tcol := VBoxContainer.new()
 	tcol.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -83,19 +67,16 @@ func build() -> void:
 	_banner = VBoxContainer.new()
 	side.add_child(_banner)
 	_actions = VBoxContainer.new()
-	_actions.add_theme_constant_override("separation", 10)
+	_actions.add_theme_constant_override("separation", Tk.S2)
 	side.add_child(_actions)
-	_search = LineEdit.new()
-	_search.placeholder_text = "Rechercher"
-	_search.clear_button_enabled = true
-	_search.custom_minimum_size = Vector2(0, 40)
-	_search.text = query
+	_search = K.InputField.new()
+	_search.label_text = "Rechercher"
+	_search.icon = "search"
 	_search.text_changed.connect(func(t: String):
 		query = t.strip_edges().to_lower()
 		_render_list())
 	side.add_child(_search)
 	_seg = W.Seg.new(SORTS, sort_mode)
-	_seg.custom_minimum_size = Vector2(0, 40)
 	_seg.changed.connect(func(id: String):
 		sort_mode = id
 		ctx.store.set_s("ui", "sort", id)
@@ -105,6 +86,7 @@ func build() -> void:
 	_list.add_theme_constant_override("separation", 0)
 	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lay.add_child(_list)
+	_search.ready.connect(func(): _search.set_text(query))
 
 	link(ctx.catalog.changed, _render)
 	link(ctx.installer.changed, _render)
@@ -156,13 +138,13 @@ func _render_banner() -> void:
 	if not u.available():
 		return
 	var p := PanelContainer.new()
-	p.add_theme_stylebox_override("panel", T.style(Color(T.OK, 0.12), 22, 16))
+	p.add_theme_stylebox_override("panel", T.style(Color(T.OK, 0.12), Tk.R_XL, Tk.S4))
 	_banner.add_child(p)
 	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 8)
+	v.add_theme_constant_override("separation", Tk.S2)
 	p.add_child(v)
 	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 12)
+	h.add_theme_constant_override("separation", Tk.S3)
 	v.add_child(h)
 	var txt := "Goodview Launcher %s disponible" % u.info.get("version", "")
 	var btn := "Mettre à jour"
@@ -180,7 +162,6 @@ func _render_banner() -> void:
 	l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	if btn != "":
 		var b := W.Btn.new(btn, "primary")
-		b.custom_minimum_size = Vector2(0, 42)
 		b.pressed.connect(func():
 			if u.state == "ready":
 				u.restart()
@@ -188,10 +169,8 @@ func _render_banner() -> void:
 				u.download())
 		h.add_child(b)
 	if u.state == "downloading":
-		var pb := ProgressBar.new()
-		pb.show_percentage = false
-		pb.custom_minimum_size = Vector2(0, 8)
-		pb.value = u.ratio * 100.0
+		var pb: Control = K.Progress.new()
+		pb.value = u.ratio
 		v.add_child(pb)
 	elif u.notes != "":
 		W.label(u.notes.left(260) + ("…" if u.notes.length() > 260 else ""), 13, T.DIM, v)
@@ -223,7 +202,7 @@ func _render_actions() -> void:
 	if ins.is_busy() and not ins.current.is_empty():
 		var c := W.card(_actions, 14)
 		var h := HBoxContainer.new()
-		h.add_theme_constant_override("separation", 12)
+		h.add_theme_constant_override("separation", Tk.S3)
 		c.add_child(h)
 		var txt := "Installation de %s" % Catalog.title(ins.current)
 		if ins.total_jobs > 1:
@@ -236,16 +215,13 @@ func _render_actions() -> void:
 		x.tooltip_text = "Annuler"
 		x.pressed.connect(ins.cancel)
 		h.add_child(x)
-		_prog = ProgressBar.new()
-		_prog.show_percentage = false
-		_prog.custom_minimum_size = Vector2(0, 8)
-		_prog.value = ins.ratio * 100.0
+		_prog = K.Progress.new()
+		_prog.value = ins.ratio
 		c.add_child(_prog)
 		return
 	var ups := ctx.updates()
 	if ups.size() > 0:
 		var b := W.Btn.new("Tout mettre à jour (%d)" % ups.size(), "primary")
-		b.custom_minimum_size = Vector2(0, 54)
 		b.pressed.connect(func():
 			for a in ctx.updates():
 				ins.enqueue(a))
@@ -254,7 +230,7 @@ func _render_actions() -> void:
 
 func _on_progress(r: float) -> void:
 	if _prog != null and is_instance_valid(_prog):
-		_prog.value = r * 100.0
+		_prog.value = r
 		_prog_lbl.text = "%d %%" % int(r * 100.0)
 
 
@@ -318,11 +294,9 @@ func _render_list() -> void:
 		g2.add_child(_card(a))
 
 
-func _grid() -> GridContainer:
-	var g := GridContainer.new()
-	g.columns = 2
-	g.add_theme_constant_override("h_separation", 16)
-	g.add_theme_constant_override("v_separation", 16)
+func _grid() -> Container:
+	var g: Container = K.Grid.new()
+	g.min_card_width = 220
 	g.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_list.add_child(g)
 	return g

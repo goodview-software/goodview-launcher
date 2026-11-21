@@ -34,8 +34,8 @@ func _ready() -> void:
 	role_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var pick := HFlowContainer.new()
 	pick.alignment = FlowContainer.ALIGNMENT_CENTER
-	pick.add_theme_constant_override("h_separation", 10)
-	pick.add_theme_constant_override("v_separation", 10)
+	pick.add_theme_constant_override("h_separation", 8)
+	pick.add_theme_constant_override("v_separation", 8)
 	add_child(pick)
 	for i in W.Avatar.BODIES.size():
 		var av := W.Avatar.new(true)

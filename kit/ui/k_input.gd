@@ -1,7 +1,8 @@
 extends VBoxContainer
 ## Champ de saisie à libellé flottant, icône, erreur. multiline = true -> zone de texte (KTextarea).
 signal text_changed(t: String)
-signal submitted(t: String)
+signal text_submitted(t: String)
+signal blurred
 const Tokens := preload("res://kit/tokens.gd")
 const KS := preload("res://kit/ui/ks.gd")
 const Fonts := preload("res://kit/fonts.gd")
@@ -41,7 +42,7 @@ func _ready() -> void:
 		var le := LineEdit.new()
 		le.secret = secret
 		le.text_changed.connect(_changed)
-		le.text_submitted.connect(func(t: String): submitted.emit(t))
+		le.text_submitted.connect(func(t: String): text_submitted.emit(t))
 		edit = le
 	edit.set_meta("k_inner", true)
 	edit.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
@@ -52,21 +53,29 @@ func _ready() -> void:
 	edit.add_theme_color_override("font_color", Tokens.text)
 	edit.add_theme_color_override("caret_color", Tokens.accent)
 	edit.focus_entered.connect(func(): _foc = true; _anim())
-	edit.focus_exited.connect(func(): _foc = false; _anim())
+	edit.focus_exited.connect(func(): _foc = false; _anim(); blurred.emit())
 	field.add_child(edit)
 	field.resized.connect(_layout)
 	err_l = KS.label(self, error, Tokens.FS_SM, Tokens.danger, 400, true)
 	err_l.visible = error != ""
-	_t = 1.0 if text() != "" else 0.0
+	if _pending != "":
+		edit.text = _pending
+	_t = 1.0 if text != "" else 0.0
 	_layout()
 	Tokens.bus.changed.connect(field.queue_redraw)
 
-func text() -> String:
-	return edit.text if edit != null else ""
+var text: String = "":
+	get:
+		return edit.text if edit != null else _pending
+	set(v):
+		_pending = v
+		if edit != null:
+			edit.text = v
+			_anim()
+var _pending := ""
 
 func set_text(t: String) -> void:
-	edit.text = t
-	_anim()
+	text = t
 
 func _changed(t: String) -> void:
 	_anim()
@@ -92,7 +101,7 @@ func _st(v: float) -> void:
 		_layout()
 
 func _anim() -> void:
-	var up := 1.0 if (_foc or text() != "") else 0.0
+	var up := 1.0 if (_foc or text != "") else 0.0
 	if is_inside_tree():
 		create_tween().tween_property(self, "_t", up, Tokens.DUR)
 	else:

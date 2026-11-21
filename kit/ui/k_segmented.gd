@@ -29,17 +29,34 @@ func _idx() -> int:
 			return i
 	return 0
 
-func _seg_w() -> float:
-	var w := 0.0
+func _natural() -> Array:
+	var l: Array = []
 	for o in options:
-		w = maxf(w, KS.text_w(str(o[1]), Tokens.FS_SM, 600) + Tokens.S3 * 2)
-	return w
+		l.append(KS.text_w(str(o[1]), Tokens.FS_SM, 600) + Tokens.S3 * 2)
+	return l
 
 func _get_minimum_size() -> Vector2:
-	return Vector2(_seg_w() * options.size() + 8, Tokens.TOUCH)
+	var t := 8.0
+	for w in _natural():
+		t += w
+	return Vector2(t, Tokens.TOUCH)
 
 func k_overflow() -> bool:
 	return size.x + 1.0 < _get_minimum_size().x
+
+## Positions [x, largeur] des segments, étirés pour remplir la largeur.
+func _slots() -> Array:
+	var nat := _natural()
+	var tot := 0.0
+	for w in nat:
+		tot += w
+	var k := (size.x - 8.0) / maxf(tot, 1.0)
+	var out: Array = []
+	var x := 4.0
+	for w in nat:
+		out.append([x, w * k])
+		x += w * k
+	return out
 
 func set_value(id: String, anim := true) -> void:
 	value = id
@@ -52,8 +69,11 @@ func _gui_input(e: InputEvent) -> void:
 	if disabled or options.is_empty():
 		return
 	if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and not e.pressed:
-		var w := (size.x - 8) / options.size()
-		var i := clampi(int((e.position.x - 4) / w), 0, options.size() - 1)
+		var sl := _slots()
+		var i := 0
+		for k in sl.size():
+			if e.position.x >= sl[k][0]:
+				i = k
 		if str(options[i][0]) != value:
 			set_value(str(options[i][0]))
 			changed.emit(value)
@@ -73,11 +93,15 @@ func _draw() -> void:
 		return
 	var r := Rect2(0, (size.y - 40) * 0.5, size.x, 40)
 	draw_style_box(KS.box(Tokens.surface3, Tokens.R_MD), r)
-	var w := (size.x - 8) / options.size()
-	var ind := Rect2(4 + _pos * w, r.position.y + 4, w, 32)
-	draw_style_box(Tokens.shadow(KS.box(Tokens.surface1.lightened(0.06), Tokens.R_SM), 1), ind)
+	var sl := _slots()
+	var i0 := clampi(int(floor(_pos)), 0, sl.size() - 1)
+	var i1 := clampi(i0 + 1, 0, sl.size() - 1)
+	var f: float = _pos - floor(_pos)
+	var ix := lerpf(sl[i0][0], sl[i1][0], f)
+	var iw := lerpf(sl[i0][1], sl[i1][1], f)
+	draw_style_box(Tokens.shadow(KS.box(Tokens.surface1.lightened(0.06), Tokens.R_SM), 1), Rect2(ix, r.position.y + 4, iw, 32))
 	draw_ring(r, Tokens.R_MD)
 	for i in options.size():
 		var sel := clampf(1.0 - absf(_pos - i), 0.0, 1.0)
 		var col := Tokens.text_muted.lerp(Tokens.text, sel)
-		KS.draw_text(self, str(options[i][1]), 4 + i * w, size.y * 0.5, Tokens.FS_SM, Color(col, 0.42 if disabled else 1.0), 600, w, HORIZONTAL_ALIGNMENT_CENTER)
+		KS.draw_text(self, str(options[i][1]), sl[i][0], size.y * 0.5, Tokens.FS_SM, Color(col, 0.42 if disabled else 1.0), 600, sl[i][1], HORIZONTAL_ALIGNMENT_CENTER)

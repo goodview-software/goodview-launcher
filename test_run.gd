@@ -14,6 +14,8 @@ const Chats := preload("res://core/chats.gd")
 const MD := preload("res://ui/markdown.gd")
 const Attach := preload("res://core/attach.gd")
 const W := preload("res://ui/widgets.gd")
+const Lint := preload("res://kit/lint.gd")
+const K := preload("res://kit/k.gd")
 
 var fails: PackedStringArray = []
 var ctx: Ctx
@@ -53,7 +55,11 @@ func fake_list(n: int) -> Array:
 	return l
 
 
+var _host: Control
+
 func run(host: Node) -> void:
+	_host = host
+	get_window().size = Vector2i(1100, 720)
 	ctx = Ctx.new()
 	host.add_child(ctx)
 	ctx.setup(true)
@@ -226,6 +232,8 @@ func run(host: Node) -> void:
 
 	await run_ui()
 	await run_assistants()
+	await run_models()
+	await run_lint(host)
 	if OS.get_environment("GL_TEST_OLLAMA") == "1":
 		await run_live()
 
@@ -336,6 +344,8 @@ func label_check(page: Control, tag: String) -> void:
 			var need := minf(fs * 2.0, l.get_theme_font("font").get_string_size(l.text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x * 0.98)
 			if l.size.x < need and l.size.x > 0.0:
 				bad.append("«%s» %.0fpx" % [l.text.left(20), l.size.x])
+	if not bad.is_empty() and OS.get_environment("GL_DBG") != "":
+		print("DBG page ", page.size, " head ", page.head_title.size, page.head_title.get_parent().size, page.head_title.get_parent().get_parent().size, page.head_title.get_parent().get_parent().get_parent().size, " bp ", page.bp)
 	check(bad.is_empty(), "libellés coupés (%s) : %s" % [tag, ", ".join(bad)])
 
 
@@ -367,7 +377,7 @@ func run_ui() -> void:
 	var sh := U.shared_theme(4)
 	check(sh.name == "Mauve" and sh.accent == "#b58bff" and sh.has("bg") and sh.has("card"), "bloc theme du profil partagé")
 	check(U.pick_model(2, [{"name": "qwen2.5-coder:7b", "size": 1}, {"name": "gemma3:4b", "size": 1}]) == "qwen2.5-coder:7b", "modèle préféré")
-	check(U.pick_model(2, ["gemma3:4b"]) == "gemma3:4b" and U.pick_model(7, ["llama3.2-vision:latest", "qwen3:8b"]) == "llama3.2-vision:latest", "repli de modèle")
+	check(U.pick_model(2, ["gemma3:4b"]) == "gemma3:4b" and U.pick_model(7, ["llama3.2-vision:latest", "qwen3:8b", "gemma3:4b"]) == "gemma3:4b", "repli de modèle")
 	check(U.pick_model(0, []) == "", "aucun modèle")
 	ctx.set_active(0)
 	await frames(2)
@@ -391,23 +401,26 @@ func run_ui() -> void:
 	check(ctx.start_page() == "home", "réglage de page de démarrage")
 	ctx.store.set_s("ui", "start", "chat")
 
-	# --- Apps : grille avec 0, 1, 4 et 7 apps, 1 et 2 colonnes
+	# --- Apps : grille adaptative avec 0, 1, 4 et 7 apps, de 360 à 1100 px
 	for n in [0, 1, 4, 7]:
-		for wide in [false, true]:
+		for w in [360, 1100]:
 			ctx.catalog.set_fake(fake_list(n))
-			home.set_wide(wide)
+			_host.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+			_host.size = Vector2(w, 800)
 			await frames(3)
-			check(home._list.get_child_count() > 0, "apps : %d apps, wide=%s" % [n, wide])
+			check(home._list.get_child_count() > 0, "apps : %d apps, %d px" % [n, w])
 			if n > 0:
-				var g: GridContainer = home._list.get_child(0)
-				check(g.columns == 2 and g.get_child_count() == n, "grille 2 colonnes (%d)" % n)
-			check((home.body.get_child(0) is HBoxContainer) == wide, "mise en page %s" % ("large" if wide else "étroite"))
-			label_check(home, "apps %d/%s" % [n, wide])
+				var g: Container = home._list.get_child(0)
+				check(g.get_script() == K.Grid and g.get_child_count() == n, "grille adaptative (%d)" % n)
+				check(g.columns == g.cols_for(g.size.x) and (w > 700 or g.columns <= 2), "colonnes adaptées à %d px : %d" % [w, g.columns])
+				if w == 1100 and n >= 4:
+					check(g.columns >= 3, "au moins 3 colonnes à 1100 px")
+			label_check(home, "apps %d/%d" % [n, w])
+	_host.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	ctx.catalog.set_fake([], "loading")
 	await frames(2)
-	check(home._list.get_child(0) is GridContainer, "chargement : cartes fantômes en grille")
+	check(home._list.get_child(0).get_script() == K.Grid, "chargement : cartes fantômes en grille")
 	ctx.catalog.set_fake(fake_list(7))
-	home.force_wide = -1
 	await frames(2)
 
 	# --- fiche d'app : versions, APK, installée ou non, textes très longs, 360 px et 1100 px
@@ -426,11 +439,10 @@ func run_ui() -> void:
 			var ap: Control = router.push("app", {"name": scenario[0]})
 			await frames(2)
 			ap._hist[scenario[0]] = _versions(scenario[1])
-			ap.force_wide = 1 if w >= 900 else 0
 			ap.rebuild()
 			await frames(3)
 			check(ap.body.get_child_count() > 0, "fiche %s v=%d w=%d" % [str(scenario[0]).left(12), scenario[1], w])
-			check((ap.body.get_child(0) is HBoxContainer) == (w >= 900), "fiche : colonnes selon la largeur (%d)" % w)
+			check(ap.body.get_child(0).get_script() == K.Split, "fiche : KSplit (%d)" % w)
 			label_check(ap, "fiche %s %d" % [str(scenario[0]).left(10), w])
 			router.back()
 			await frames(2)
@@ -467,7 +479,7 @@ func run_assistants() -> void:
 	check(Ollama.wants_think_off("qwen3:8b") and not Ollama.wants_think_off("llama3.2:3b"), "think désactivé pour qwen3")
 	check(Ollama.strip_think("<think>x</think>Salut") == "Salut" and Ollama.strip_think("a<think>pas fini") == "a", "balises <think> masquées")
 	check(Ollama.supports_tools("llama3.1:8b") and not Ollama.supports_tools("gemma3:4b"), "modèles avec tools")
-	check(U.is_vision("llama3.2-vision:latest") and U.is_vision("gemma3:4b") and not U.is_vision("llama3.2:3b"), "modèles vision")
+	check(not U.is_vision("llama3.2-vision:latest") and U.is_broken("llama3.2-vision") and U.is_vision("gemma3:4b") and not U.is_vision("llama3.2:3b"), "modèles vision")
 
 	# --- Markdown -> BBCode
 	var bb := MD.to_bbcode("# Titre\n**gras** *ital* `code [x]`\n- un\n1. deux\n[lien](https://a.b)", "4de1b4")
@@ -744,3 +756,119 @@ func run_live() -> void:
 	check("done" in kinds or "error" in kinds, "Ollama réel : l'orchestre termine")
 	check("done" in kinds, "Ollama réel : pas d'erreur (%s)" % str(evs.filter(func(e): return e[0] == "error")))
 	print("Ollama réel : délégations = ", orch.cards.size(), " ; événements = ", kinds.size())
+
+
+# ------------------------------------------------------------------ Lint du kit sur toutes les pages et popups (320 -> 1600 px)
+
+func lint_report(defects: Array, what: String) -> void:
+	var seen := {}
+	for d in defects:
+		var k := str(d)
+		k = k.substr(k.find("]") + 1)
+		k = k.substr(0, 110)
+		if not seen.has(k):
+			seen[k] = true
+			if seen.size() <= int(OS.get_environment("GL_LINT_N") if OS.get_environment("GL_LINT_N") != "" else "6"):
+				printerr("LINT ", str(d).left(220))
+	check(defects.is_empty(), "lint %s : %d défauts (%d uniques)" % [what, defects.size(), seen.size()])
+
+
+func run_lint(host: Control) -> void:
+	router.instant = true
+	var sizes := {0: [], 1: [fake("une-app-au-nom-vraiment-tres-long-pour-tester-les-coupures-de-texte", "v1.0.0-beta.12", "2026-01-01T00:00:00Z", true, true)], 7: fake_list(7)}
+	ctx.store.installed.clear()
+	ctx.store.installed["app-0"] = {"tag": "v0.9", "exe": "/tmp/none", "desk": false}
+	var widths := Lint.T.WIDTHS_TEST if OS.get_environment("GL_LINT_FAST") != "1" else [360, 1100]
+	for n in [0, 1, 7]:
+		ctx.catalog.set_fake(sizes[n])
+		for id in ["home", "chat", "profile", "settings", "about", "welcome", "chat_history", "chat_settings", "app", "kit"]:
+			if id == "kit" and not Router.PAGES.has("kit"):
+				continue
+			var args := {"name": sizes[n][0].name} if (id == "app" and n > 0) else {}
+			if id == "app" and n == 0:
+				continue
+			if OS.get_environment("GL_LINT_ONLY") != "" and not (id in OS.get_environment("GL_LINT_ONLY").split(",")):
+				continue
+			if OS.get_environment("GL_LINT_N7") != "" and n != int(OS.get_environment("GL_LINT_N7")):
+				continue
+			var pg: Control = router.go_tab(id, args) if id in Router.TABS else router.reset(id, args)
+			for sp in router.stage.get_children():
+				sp.visible = sp == pg
+			for tw in get_tree().get_processed_tweens():
+				tw.kill()
+			pg.position = Vector2.ZERO
+			pg.modulate.a = 1.0
+			await frames(2)
+			if OS.get_environment("GL_LINT_DBG") != "":
+				print("DBG ", get_tree().get_processed_tweens().size(), id, pg.position, pg.get_parent().position, pg.get_parent().get_parent().position, router.instant, host.position, host.get_global_rect())
+			var d: Array = await Lint.sweep(host, host, widths, get_tree(), "%s/%d apps" % [id, n])
+			lint_report(d, "page %s (%d apps)" % [id, n])
+	router.reset("home")
+	await frames(2)
+	# popups du kit avec contenu long
+	for kind in ["modal", "danger", "sheet", "menu", "toast"]:
+		if OS.get_environment("GL_LINT_ONLY") != "":
+			break
+		var cov := [0]
+		var make := func() -> Control:
+			var m: Control
+			match kind:
+				"sheet":
+					m = K.Sheet.new()
+				_:
+					m = K.Modal.new()
+			m.set_meta("instant", true)
+			m.title = "Titre assez long pour vérifier le retour à la ligne dans une modale étroite"
+			m.danger = kind == "danger"
+			m.add_text("Un message tout aussi long qui doit passer à la ligne sans jamais être coupé ni déborder de la carte, quelle que soit la largeur.")
+			m.add_button("Annuler", "secondary", "")
+			m.add_button("Supprimer définitivement", "danger" if kind == "danger" else "primary", "ok")
+			return m
+		var node: Control
+		if kind == "menu":
+			node = K.Menu.open(host, [{"id": "a", "label": "Renommer la conversation", "icon": "pencil"}, {"sep": true}, {"id": "b", "label": "Supprimer", "icon": "trash-2", "danger": true}], Rect2(host.size.x - 60, 60, 44, 44))
+			node.set_meta("instant", true)
+		elif kind == "toast":
+			node = K.Toast.new()
+			node.instant = true
+			host.add_child(node)
+			node.push("Une notification avec un texte assez long pour passer à la ligne", "success", "Annuler", Callable())
+		else:
+			node = make.call()
+			node.popup(host)
+		var d2: Array = await Lint.sweep(host, node, Lint.T.WIDTHS_TEST, get_tree(), "popup " + kind)
+		lint_report(d2, "popup " + kind)
+		node.queue_free()
+		await frames(2)
+	host.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	await frames(2)
+
+
+# ------------------------------------------------------------------ Modèle incompatible (mllama) : repli automatique + message lisible
+
+func run_models() -> void:
+	handler = func(path: String, body: Dictionary) -> Dictionary:
+		if path == "/api/chat" and body.get("model", "") == "llama3.1:8b":
+			return {"code": 500, "lines": [{"error": "llama-server process has terminated: error loading model: unknown model architecture: 'mllama'"}]}
+		return default_handler.call(path, body)
+	ctx.models = [{"name": "llama3.1:8b", "size": 1.0}, {"name": "gemma3:4b", "size": 2.0}]
+	ctx.ollama.bad_models.clear()
+	var evs: Array = []
+	var orch: Orchestra = ctx.orchestra
+	orch.allow = false
+	orch.resolve_model = func(a: int) -> String: return ctx.model_for(a)
+	orch.event.connect(func(k, d): evs.append([k, d]))
+	check(ctx.model_for(0) == "llama3.1:8b", "avant l'échec : modèle le plus léger")
+	orch.run(0, [{"role": "user", "content": "salut"}])
+	await wait_for(func(): return not orch.running)
+	check("llama3.1:8b" in ctx.ollama.bad_models and ctx.model_for(0) == "gemma3:4b", "modèle en échec exclu, repli sur gemma3:4b")
+	check(evs.any(func(e): return e[0] == "notice" and "bascule sur gemma3:4b" in str(e[1].text)), "toast discret de bascule")
+	check(evs.any(func(e): return e[0] == "done" and "Bonjour" in str(e[1].text)), "la réponse arrive après le repli")
+	check(not evs.any(func(e): return e[0] == "error"), "pas d'erreur visible après repli")
+	var fi: String = Ollama.friendly("unsupported", "unknown model architecture: 'mllama'", "weird:7b", "0.33.1")
+	check("pas pris en charge" in fi and "0.33.1" in fi and "Choisis-en un autre" in fi, "message lisible : architecture inconnue")
+	check("n'est pas installé" in Ollama.friendly("model_missing", "", "x") and "mémoire" in Ollama.friendly("memory", "") and "injoignable" in Ollama.friendly("offline", ""), "messages : absent / mémoire / éteint")
+	check(U.is_broken("llama3.2-vision:latest") and not U.is_vision("llama3.2-vision:latest") and U.get_u(7).model == "gemma3:4b", "Brume sur gemma3:4b, mllama écarté")
+	orch.event.get_connections().map(func(c): orch.event.disconnect(c.callable))
+	ctx.ollama.bad_models.clear()
+	handler = default_handler

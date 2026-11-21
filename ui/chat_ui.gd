@@ -47,7 +47,7 @@ class Tile extends W.Tap:
 		super()
 		ai = a
 		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		custom_minimum_size = Vector2(40, 58)
+		custom_minimum_size = Vector2(36, 58)
 		tooltip_text = "%s · %s  (Ctrl+%d)" % [U.get_u(a).name, U.get_u(a).specialty, a + 1]
 
 	func _process(d: float) -> void:
@@ -89,7 +89,7 @@ class Strip extends HBoxContainer:
 	var tiles: Array = []
 
 	func _init(sel := 0) -> void:
-		add_theme_constant_override("separation", 2)
+		add_theme_constant_override("separation", 0)
 		for i in U.count():
 			var tl := Tile.new(i)
 			tl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -190,7 +190,7 @@ class CardView extends PanelContainer:
 			user_toggled = true
 			set_open(not open))
 		body = VBoxContainer.new()
-		body.add_theme_constant_override("separation", 6)
+		body.add_theme_constant_override("separation", 4)
 		v.add_child(body)
 		qlbl = W.label(question, 13, T.DIM, body)
 		ans = RichTextLabel.new()

@@ -21,7 +21,8 @@ class Item extends Press:
 		return [[Tokens.danger if danger else Tokens.text, Tokens.surface2]]
 	func _draw() -> void:
 		draw_style_box(KS.box(Color(1, 1, 1, 0.08 * hover + 0.05 * down), Tokens.R_SM), Rect2(Vector2.ZERO, size))
-		var col := Tokens.danger if danger else Tokens.text
+		var col := (Tokens.danger if danger else Tokens.text)
+		col.a = 0.45 if disabled else 1.0
 		var x := Tokens.S3
 		if icon != "":
 			var t := Icon.texture(icon, 16)
@@ -56,6 +57,7 @@ func build(items: Array, at: Rect2) -> void:
 		b.label = str(it.label)
 		b.icon = str(it.get("icon", ""))
 		b.danger = it.get("danger", false)
+		b.disabled = it.get("disabled", false)
 		var id := str(it.id)
 		b.pressed.connect(func(): chosen.emit(id); close())
 		v.add_child(b)

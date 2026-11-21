@@ -172,6 +172,14 @@ func _assistant(ai: int, history: Array, depth: int, chain: Array, sink: int, to
 		if stopped:
 			return {"text": total, "tokens": tokens}
 		if not r[0]:
+			if r[1] == "unsupported" or r[1] == "memory":
+				ollama.bad_models.append(model)
+				var alt: String = resolve_model.call(ai)
+				if alt != "" and alt != model:
+					event.emit("notice", {"text": "%s ne se charge pas : bascule sur %s." % [model, alt], "toast": true})
+					model = alt
+					text_mode = not Ollama.supports_tools(model)
+					continue
 			if r[1] == "no_tools" and not text_mode:
 				text_mode = true
 				event.emit("notice", {"text": "Ce modèle n'a pas les tools : repli texte."})

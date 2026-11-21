@@ -6,12 +6,16 @@ const Ctx := preload("res://core/ctx.gd")
 const Catalog := preload("res://core/catalog.gd")
 const T := preload("res://ui/theme.gd")
 const W := preload("res://ui/widgets.gd")
+const K := preload("res://kit/k.gd")
+const Tk := preload("res://kit/tokens.gd")
 
 var ctx: Ctx
 var router: Control
 var args := {}
 var page_id := ""
 var max_w := 960.0
+var caps := {}
+var extra_containers: Array = []
 var page_title := ""  # titre de fenêtre (vide = accueil)
 
 
@@ -24,9 +28,12 @@ func _ready() -> void:
 
 
 func _fit_width() -> void:
-	var cs := {"xs": 100000, "sm": 100000, "md": minf(720.0, max_w), "lg": minf(960.0, max_w), "xl": max_w}
-	_hc.max_widths = cs
-	_bc.max_widths = cs
+	caps = {"xs": 100000, "sm": 100000, "md": minf(720.0, max_w), "lg": max_w, "xl": max_w}
+	_hc.max_widths = caps
+	_bc.max_widths = caps
+	for c in extra_containers:
+		if is_instance_valid(c):
+			c.max_widths = caps
 
 
 func set_title(t: String) -> void:

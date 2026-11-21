@@ -17,6 +17,10 @@ static func make(txt: String, knd := "secondary", sz := "md", ico := "") -> Cont
 	b.icon = ico
 	return b
 
+func _ready() -> void:
+	super()
+	_fit()
+
 func _set_text(v: String) -> void:
 	text = v
 	_fit()
@@ -62,7 +66,9 @@ func _fit() -> void:
 	var w: float = _content_w() + (0 if kind == "icon" and text == "" else px * 2)
 	if kind == "icon" or text == "":
 		w = maxf(w, hh)
-	custom_minimum_size = Vector2(maxf(w, Tokens.TOUCH if kind == "icon" else w), maxf(hh, Tokens.TOUCH))
+	if text == "":
+		w = maxf(w, Tokens.TOUCH)
+	custom_minimum_size = Vector2(w, maxf(hh, Tokens.TOUCH))
 	queue_redraw()
 	update_minimum_size()
 

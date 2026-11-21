@@ -12,6 +12,7 @@ func _init() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	z_index = 3800
+	set_meta("k_overlay", true)
 	stack = VBoxContainer.new()
 	stack.add_theme_constant_override("separation", Tokens.S2)
 	stack.alignment = BoxContainer.ALIGNMENT_END
@@ -58,7 +59,7 @@ func push(text: String, kind := "info", action := "", cb := Callable(), ttl := 3
 		get_tree().create_timer(ttl).timeout.connect(_dismiss.bind(p))
 	return p
 
-func _dismiss(p: Control) -> void:
+func _dismiss(p: Variant) -> void:
 	if not is_instance_valid(p) or p.is_queued_for_deletion():
 		return
 	var tw := create_tween()

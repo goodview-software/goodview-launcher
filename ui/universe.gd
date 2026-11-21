@@ -50,7 +50,7 @@ const ALL := [
 		"prompt": "Tu es Braise, experte en jeux vidéo, modding (Arma Reforger, Enfusion, scripts Enforce), configuration et optimisation de PC (FPS, pilotes, Linux/Proton). Tu es directe, concrète, tu donnes des étapes numérotées et des réglages chiffrés."},
 	{"id": "brume", "name": "Brume", "role": "expert", "specialty": "Recherche, résumés, documents et images",
 		"accent": "c9d1da", "bg": "131416", "card": "1b1e20", "card_hi": "232629", "field": "2c2f33",
-		"motto": "Silence et clarté", "model": "llama3.2-vision", "fallback": ["gemma3:4b", "qwen3:8b"], "temp": 0.3,
+		"motto": "Silence et clarté", "model": "gemma3:4b", "fallback": ["qwen3:8b", "llama3.1:8b"], "temp": 0.3,
 		"anim": {"speed": 0.7, "bounce": 0.5}, "vision": true,
 		"personality": "Posée et minimaliste, elle va à l'essentiel en phrases courtes.",
 		"prompt": "Tu es Brume, spécialiste de la lecture de documents, du résumé, de la recherche d'informations dans des textes et de l'analyse d'images (modèle vision). Tu résumes en points courts, cites les passages utiles et signales ce qui manque."},
@@ -111,10 +111,12 @@ static func _base(n: String) -> String:
 
 ## Modèle à utiliser : préféré s'il est installé, sinon repli, sinon n'importe quel installé (le plus petit).
 ## installed : [{name, size}] ou [String].
-static func pick_model(i: int, installed: Array) -> String:
+static func pick_model(i: int, installed: Array, exclude := []) -> String:
 	var names: Array = []
 	for m in installed:
-		names.append(str(m.name) if m is Dictionary else str(m))
+		var nm := str(m.name) if m is Dictionary else str(m)
+		if not is_broken(nm) and not (nm in exclude):
+			names.append(nm)
 	if names.is_empty():
 		return ""
 	var u := get_u(i)
@@ -131,9 +133,22 @@ static func pick_model(i: int, installed: Array) -> String:
 	return names[0]
 
 
+## Modèles connus pour ne plus se charger avec Ollama récent (architecture mllama).
+const BROKEN := ["mllama", "llama3.2-vision"]
+
+static func is_broken(model: String) -> bool:
+	var m := model.to_lower()
+	for k in BROKEN:
+		if k in m:
+			return true
+	return false
+
+
 static func is_vision(model: String) -> bool:
 	var m := model.to_lower()
-	for k in ["vision", "gemma3", "llava", "minicpm-v", "qwen2.5vl", "qwen3-vl", "llama4", "moondream", "bakllava"]:
+	if is_broken(m):
+		return false
+	for k in ["gemma3", "llava", "minicpm-v", "qwen2.5vl", "qwen3-vl", "llama4", "moondream", "bakllava"]:
 		if k in m:
 			return true
 	return false

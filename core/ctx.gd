@@ -24,6 +24,7 @@ var router: Node  # ui/router.gd
 var ollama: Ollama
 var chats: Chats
 var orchestra: Orchestra
+var ollama_version := ""
 var models: Array = []  # [{name, size}] vus par /api/tags
 var active := 0  # assistant actif (= univers affiché)
 var pull := {}  # téléchargement de modèle en cours {model, ratio, status, req, error}
@@ -109,9 +110,25 @@ func set_active(i: int) -> void:
 	active_changed.emit()
 
 
+## Vision : capacités /api/show si connues, sinon heuristique sur le nom (jamais pour les modèles cassés).
+func model_is_vision(m: String) -> bool:
+	if U.is_broken(m):
+		return false
+	if ollama.caps_cache.has(m):
+		return "vision" in ollama.caps_cache[m]
+	return U.is_vision(m)
+
+
+## Précharge les capacités (/api/show) des modèles installés.
+func prefetch_caps() -> void:
+	for m in models:
+		if not ollama.caps_cache.has(m.name):
+			await ollama.capabilities(m.name)
+
+
 ## Modèle Ollama d'un assistant (préféré s'il est installé, sinon repli).
 func model_for(ai: int) -> String:
-	return U.pick_model(ai, models)
+	return U.pick_model(ai, models, ollama.bad_models)
 
 
 ## Page affichée au démarrage : "chat" (défaut) ou "home" (Apps).

@@ -4,10 +4,10 @@ extends "res://pages/page.gd"
 
 const U := preload("res://ui/universe.gd")
 const Ollama := preload("res://core/ollama.gd")
-const SUGGESTED := ["llama3.2:3b", "gemma3:4b", "qwen3:8b", "qwen2.5-coder:7b", "llama3.2-vision"]
+const SUGGESTED := ["llama3.2:3b", "gemma3:4b", "qwen3:8b", "qwen2.5-coder:7b"]
 
 var _models_box: VBoxContainer
-var _pull_edit: LineEdit
+var _pull_edit: Control
 var _pull_bar: ProgressBar
 var _pull_lbl: Label
 var _pull_btn: W.Btn
@@ -23,7 +23,7 @@ func build() -> void:
 	var c1 := W.card(body)
 	W.label("Modèles", 18, T.TEXT, c1)
 	_models_box = VBoxContainer.new()
-	_models_box.add_theme_constant_override("separation", 6)
+	_models_box.add_theme_constant_override("separation", 4)
 	c1.add_child(_models_box)
 	_fill_models()
 	W.hsep(c1)
@@ -31,13 +31,12 @@ func build() -> void:
 	var hr := HBoxContainer.new()
 	hr.add_theme_constant_override("separation", 8)
 	c1.add_child(hr)
-	_pull_edit = LineEdit.new()
-	_pull_edit.placeholder_text = "ex. llama3.2:3b"
+	_pull_edit = K.InputField.new()
+	_pull_edit.label_text = "Modèle (ex. llama3.2:3b)"
 	_pull_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_pull_edit.text_submitted.connect(func(_t): start_pull(_pull_edit.text))
 	hr.add_child(_pull_edit)
 	_pull_btn = W.Btn.new("", "primary")
-	_pull_btn.custom_minimum_size = Vector2(54, 46)
 	_pull_btn.pressed.connect(func(): start_pull(_pull_edit.text))
 	hr.add_child(_pull_btn)
 	var dl := W.IconBtn.new("download", 46)
@@ -46,8 +45,8 @@ func build() -> void:
 	hr.add_child(dl)
 	_pull_btn.visible = false
 	var fl := HFlowContainer.new()
-	fl.add_theme_constant_override("h_separation", 6)
-	fl.add_theme_constant_override("v_separation", 6)
+	fl.add_theme_constant_override("h_separation", 4)
+	fl.add_theme_constant_override("v_separation", 4)
 	c1.add_child(fl)
 	for s in SUGGESTED:
 		var b := W.Btn.new(s, "soft")
@@ -102,16 +101,17 @@ func build() -> void:
 	r2.add_child(seg)
 	W.hsep(c2)
 	W.label("URL d'Ollama (reste sur ce PC)", 15, T.DIM, c2)
-	var ue := LineEdit.new()
+	var ue: Control = K.InputField.new()
+	ue.label_text = "URL"
 	ue.text = ctx.ollama.base_url
 	var commit_url := func():
-		var u := ue.text.strip_edges()
+		var u: String = ue.text.strip_edges()
 		if u == "":
 			u = Ollama.DEFAULT_URL
 		ctx.ollama.base_url = u
 		ctx.store.set_s("chat", "url", u)
 	ue.text_submitted.connect(func(_t): commit_url.call())
-	ue.focus_exited.connect(func(): commit_url.call())
+	ue.blurred.connect(func(): commit_url.call())
 	c2.add_child(ue)
 
 	# --- Consignes
@@ -131,7 +131,7 @@ func build() -> void:
 	for i in U.count():
 		var u := U.get_u(i)
 		var h := HBoxContainer.new()
-		h.add_theme_constant_override("separation", 10)
+		h.add_theme_constant_override("separation", 8)
 		c4.add_child(h)
 		var av := W.Avatar.new()
 		av.variant = i
@@ -140,15 +140,14 @@ func build() -> void:
 		h.add_child(av)
 		var v := VBoxContainer.new()
 		v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		v.add_theme_constant_override("separation", 1)
+		v.add_theme_constant_override("separation", 0)
 		h.add_child(v)
 		W.label("%s%s" % [u.name, "  · chef d'orchestre" if u.role == "general" else ""], 16, Color(str(u.accent)), v)
 		W.label(str(u.specialty), 12, T.DIM, v)
 		var m := ctx.model_for(i)
 		var pl := HBoxContainer.new()
-		pl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		h.add_child(pl)
-		W.pill(pl, m if m != "" else "aucun modèle", T.OK if m != "" else T.DIM)
+		v.add_child(pl)
+		W.pill(pl, m if m != "" else "aucun modèle", T.OK if m != "" else T.DIM).set_meta("k_dup_ok", true)  # affectation assistant -> modèle (pas un doublon)
 
 
 func _fill_models() -> void:
@@ -163,7 +162,9 @@ func _fill_models() -> void:
 		_models_box.add_child(h)
 		var l := W.label(m.name, 15, T.TEXT, h)
 		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		if U.is_vision(m.name):
+		if U.is_broken(m.name):
+			W.pill(h, "incompatible", T.BAD)
+		elif ctx.model_is_vision(m.name):
 			W.pill(h, "vision", T.OK)
 		W.label(Ollama.fmt_size(m.size), 13, T.DIM, h)
 
@@ -206,6 +207,7 @@ func _reload_models() -> void:
 			ms.append({"name": str(m.get("name", "")), "size": float(m.get("size", 0))})
 		ms.sort_custom(func(a, b): return a.size < b.size)
 		ctx.models = ms
+		ctx.prefetch_caps()
 	if is_inside_tree() and _models_box != null and is_instance_valid(_models_box):
 		_fill_models()
 

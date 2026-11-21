@@ -135,11 +135,16 @@ class Req extends RefCounted:
 	## Après la fin : message d'erreur HTTP lisible.
 	func fail_info() -> Array:
 		var msg := errbuf
-		var d = JSON.parse_string(errbuf)
+		var d = JSON.parse_string(errbuf) if errbuf.strip_edges() != "" else null
 		if d is Dictionary and d.has("error"):
 			msg = str(d.error)
 		var kind := "http"
-		if code == 404 or "not found" in msg.to_lower():
+		var low := msg.to_lower()
+		if "unknown model architecture" in low or "mllama" in low or "llama-server process has terminated" in low:
+			kind = "unsupported"
+		elif "more system memory" in low or "out of memory" in low or "requires more" in low:
+			kind = "memory"
+		elif code == 404 or "not found" in low:
 			kind = "model_missing"
 		elif "does not support tools" in msg.to_lower():
 			kind = "no_tools"
@@ -255,6 +260,48 @@ func chat(model: String, messages: Array, opts := {}, tools := [], stream := tru
 	if not tools.is_empty():
 		b["tools"] = tools
 	return _wrap(_start(HTTPClient.METHOD_POST, "/api/chat", b))
+
+
+## Message lisible pour une erreur Ollama (kind, message brut) -> texte.
+static func friendly(kind: String, msg: String, model := "", version := "") -> String:
+	match kind:
+		"unsupported":
+			return "Ce modèle n'est pas pris en charge par ta version d'Ollama%s. Choisis-en un autre." % ((" (" + version + ")") if version != "" else "")
+		"model_missing":
+			return "Le modèle %s n'est pas installé. Tu peux le télécharger." % model
+		"memory":
+			return "Pas assez de mémoire pour charger ce modèle. Choisis un modèle plus petit."
+		"offline":
+			return "Ollama est injoignable. Lance-le puis réessaie."
+		"timeout":
+			return "Délai dépassé : le modèle ne répond plus."
+	return msg
+
+
+## Modèles qui ont échoué au chargement pendant cette session (exclus du choix automatique).
+var bad_models: Array = []
+var caps_cache := {}
+
+
+func show_model(model: String) -> Req:
+	return _wrap(_start(HTTPClient.METHOD_POST, "/api/show", {"model": model}))
+
+
+## Capacités d'un modèle via /api/show ("vision", "tools", ...) ; met en cache. Renvoie [] si inconnu.
+func capabilities(model: String) -> Array:
+	if caps_cache.has(model):
+		return caps_cache[model]
+	var res: Array = await collect(show_model(model))
+	var caps: Array = []
+	if res[0] and not res[3].is_empty():
+		var d: Dictionary = res[3][0]
+		caps = d.get("capabilities", [])
+		caps_cache[model] = caps
+	return caps
+
+
+func version() -> Req:
+	return _wrap(_start(HTTPClient.METHOD_GET, "/api/version", {}))
 
 
 func tags() -> Req:

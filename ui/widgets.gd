@@ -31,7 +31,11 @@ static func snap(px: int) -> int:
 
 static func label(text: String, size: int, color: Color, parent: Control = null) -> Label:
 	var s := snap(size)
-	var l := KS.label(null, text, s, color, 600 if s >= Tk.FS_XL else 400, not (parent is HBoxContainer))
+	var l := KS.label(null, text, s, color, 600 if s >= Tk.FS_XL else 400, true)
+	if parent is HBoxContainer:
+		# dans une rangée : le texte court garde sa largeur, le long peut passer à la ligne (jamais coupé)
+		l.size_flags_horizontal = 0
+		l.custom_minimum_size.x = minf(KS.text_w(text, s, 600 if s >= Tk.FS_XL else 400) + 1.0, 8.0 * s)
 	if parent != null:
 		parent.add_child(l)
 	return l

@@ -56,6 +56,14 @@ static func _bg_of(n: Control, root: Control) -> Color:
 		base = T.over(layers[i], base)
 	return base
 
+static func _overlay_of(n: Node) -> Node:
+	var p := n
+	while p != null:
+		if p.has_meta("k_overlay"):
+			return p
+		p = p.get_parent()
+	return null
+
 static func _tag(n: Node, root: Node) -> String:
 	var p := str(root.get_path_to(n)).split("/")
 	var short := "/".join(p.slice(maxi(0, p.size() - 3)))
@@ -70,6 +78,7 @@ static func scan(root: Control, ctx := "") -> Array:
 	var rr := root.get_global_rect()
 	var inter: Array = []
 	var bad_overflow := {}
+	var seen_txt := {}
 	var stack: Array = [root]
 	var qi := 0
 	while qi < stack.size():
@@ -89,7 +98,36 @@ static func scan(root: Control, ctx := "") -> Array:
 			var par := c.get_parent()
 			if not (par is Control and bad_overflow.has(par)):
 				bad_overflow[c] = true
-				out.append("débordement horizontal %s : x=%.0f..%.0f pour une zone de %.0f" % [tag, r.position.x - rr.position.x, r.end.x - rr.position.x, rr.size.x])
+				var why := ""
+				if c is Container:
+					var worst: Control = null
+					for ch in c.get_children():
+						if ch is Control and ch.visible and (worst == null or ch.get_combined_minimum_size().x > worst.get_combined_minimum_size().x):
+							worst = ch
+					var depth := 0
+					while worst != null and worst is Container and depth < 8:
+						var nxt: Control = null
+						for ch2 in worst.get_children():
+							if ch2 is Control and ch2.visible and (nxt == null or ch2.get_combined_minimum_size().x > nxt.get_combined_minimum_size().x):
+								nxt = ch2
+						if nxt == null or nxt.get_combined_minimum_size().x < worst.get_combined_minimum_size().x - 40:
+							break
+						worst = nxt
+						depth += 1
+					var hint := ""
+					if worst != null:
+						var q: Array = [worst]
+						while not q.is_empty() and hint == "":
+							var n2: Node = q.pop_front()
+							if n2 is Label and (n2 as Label).text != "":
+								hint = " « %s »" % (n2 as Label).text.left(24)
+							elif n2.get("text") is String and str(n2.get("text")) != "":
+								hint = " « %s »" % str(n2.get("text")).left(24)
+							for c3 in n2.get_children():
+								q.append(c3)
+					if worst != null:
+						why = hint + " [plus large enfant : %s min %.0f]" % [_tag(worst, root), worst.get_combined_minimum_size().x]
+				out.append("débordement horizontal %s : x=%.0f..%.0f pour une zone de %.0f%s" % [tag, r.position.x - rr.position.x, r.end.x - rr.position.x, rr.size.x, why])
 		# 2/3. interactifs
 		if _is_interactive(c):
 			inter.append(c)
@@ -98,6 +136,16 @@ static func scan(root: Control, ctx := "") -> Array:
 		# 4. textes
 		if c is Label:
 			var l := c as Label
+			if l.text.length() >= 3 and l.text.length() <= 40 and l.size.x > 0 and not l.has_meta("k_dup_ok"):
+				var key := l.text.strip_edges()
+				var has_digit := false
+				for ch in key:
+					if ch >= "0" and ch <= "9":
+						has_digit = true
+				if has_digit:
+					if seen_txt.has(key):
+						out.append("donnée affichée deux fois « %s » %s" % [key, _tag(l, root)])
+					seen_txt[key] = true
 			if l.text != "" and l.size.x > 0:
 				var f := l.get_theme_font("font")
 				var fs := l.get_theme_font_size("font_size")
@@ -154,9 +202,11 @@ static func scan(root: Control, ctx := "") -> Array:
 			var b: Control = inter[j]
 			if a.is_ancestor_of(b) or b.is_ancestor_of(a):
 				continue
+			if _overlay_of(a) != _overlay_of(b):
+				continue  # un toast / menu flotte volontairement au-dessus du contenu
 			var ia := a.get_global_rect().intersection(b.get_global_rect())
 			if ia.size.x > 2.0 and ia.size.y > 2.0:
-				out.append("chevauchement %s / %s (%.0fx%.0f)" % [_tag(a, root), _tag(b, root), ia.size.x, ia.size.y])
+				out.append("chevauchement %s %s / %s %s (%.0fx%.0f)" % [_tag(a, root), str(a.get_global_rect()), _tag(b, root), str(b.get_global_rect()), ia.size.x, ia.size.y])
 	var res: Array = []
 	for m in out:
 		res.append(("[%s] " % ctx if ctx != "" else "") + str(m))

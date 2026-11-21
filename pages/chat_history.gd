@@ -9,7 +9,7 @@ var query := ""
 var filter_ai := -1
 var renaming := ""
 var _list: VBoxContainer
-var _filters: HBoxContainer
+var _filters: Control
 
 
 func _init() -> void:
@@ -24,20 +24,19 @@ func build() -> void:
 		ctx.pending_chat = "new"
 		router.back())
 	head_right.add_child(nb)
-	var se := LineEdit.new()
-	se.placeholder_text = "Rechercher dans les conversations"
-	se.clear_button_enabled = true
-	se.custom_minimum_size = Vector2(0, 44)
+	var se: Control = K.InputField.new()
+	se.label_text = "Rechercher dans les conversations"
+	se.icon = "search"
 	se.text = query
 	se.text_changed.connect(func(t: String):
 		query = t.strip_edges()
 		_render())
 	body.add_child(se)
-	_filters = HBoxContainer.new()
-	_filters.add_theme_constant_override("separation", 4)
+	_filters = K.Row.new()
+	_filters.gap = Tk.S1
 	body.add_child(_filters)
 	_list = VBoxContainer.new()
-	_list.add_theme_constant_override("separation", 10)
+	_list.add_theme_constant_override("separation", 8)
 	body.add_child(_list)
 	_render()
 
@@ -55,7 +54,7 @@ func _render() -> void:
 		var av := W.Avatar.new(true)
 		av.variant = i
 		av.selected = i == filter_ai
-		av.custom_minimum_size = Vector2(38, 38)
+		av.custom_minimum_size = Vector2(44, 44)
 		av.tooltip_text = "Filtrer : " + str(U.get_u(i).name)
 		av.pressed.connect(func(): set_filter(i))
 		_filters.add_child(av)
@@ -70,7 +69,7 @@ func _render() -> void:
 	for g in Chats.group(es, Time.get_unix_time_from_system()):
 		W.label(g[0], 13, T.DIM, _list)
 		var card := PanelContainer.new()
-		card.add_theme_stylebox_override("panel", T.style(T.CARD, 22, 6))
+		card.add_theme_stylebox_override("panel", T.style(T.CARD,22, 4))
 		_list.add_child(card)
 		var v := VBoxContainer.new()
 		card.add_child(v)
@@ -83,7 +82,7 @@ func _render() -> void:
 func _row(e: Dictionary) -> Control:
 	var row := W.Row.new()
 	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 10)
+	h.add_theme_constant_override("separation", 8)
 	row.add_child(h)
 	var av := W.Avatar.new()
 	av.variant = int(e.assistant)
@@ -93,7 +92,7 @@ func _row(e: Dictionary) -> Control:
 	var v := VBoxContainer.new()
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	v.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	v.add_theme_constant_override("separation", 1)
+	v.add_theme_constant_override("separation", 0)
 	h.add_child(v)
 	if renaming == e.id:
 		var le := LineEdit.new()

@@ -15,7 +15,7 @@ func _init() -> void:
 
 func build() -> void:
 	_box = VBoxContainer.new()
-	_box.add_theme_constant_override("separation", 18)
+	_box.add_theme_constant_override("separation", 16)
 	body.add_child(_box)
 	_show_step(step, true)
 

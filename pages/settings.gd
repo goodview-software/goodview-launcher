@@ -65,26 +65,23 @@ func build() -> void:
 	var c2 := W.card(body)
 	W.label("Installation", 18, T.TEXT, c2)
 	W.label("Dossier des apps (appliqué aux prochaines installations)", 13, T.DIM, c2)
-	var pe := LineEdit.new()
+	var pe: Control = K.InputField.new()
+	pe.label_text = "Dossier"
 	pe.text = ctx.store.apps_dir()
-	pe.add_theme_font_size_override("font_size", 14)
 	c2.add_child(pe)
-	var pr := HBoxContainer.new()
-	pr.add_theme_constant_override("separation", 10)
+	var pr: Control = K.Row.new()
 	c2.add_child(pr)
 	var open := W.Btn.new("Ouvrir le dossier", "soft")
-	open.custom_minimum_size = Vector2(0, 44)
 	open.pressed.connect(_open_dir)
 	pr.add_child(open)
 	var def := W.Btn.new("Par défaut", "ghost")
-	def.custom_minimum_size = Vector2(0, 44)
 	def.pressed.connect(func():
 		ctx.store.set_s("install", "dir", "")
 		pe.text = ctx.store.apps_dir()
 		ctx.notify("Dossier par défaut rétabli"))
 	pr.add_child(def)
 	var apply := func():
-		var p := pe.text.strip_edges()
+		var p: String = pe.text.strip_edges()
 		if p == ctx.store.apps_dir():
 			return
 		if p == "" or DirAccess.make_dir_recursive_absolute(p) == OK:
@@ -95,7 +92,7 @@ func build() -> void:
 			pe.text = ctx.store.apps_dir()
 			ctx.notify("Dossier inaccessible", "error")
 	pe.text_submitted.connect(func(_t: String): apply.call())
-	pe.focus_exited.connect(func(): apply.call())
+	pe.blurred.connect(func(): apply.call())
 
 	# --- Cache
 	var c3 := W.card(body)
@@ -130,7 +127,7 @@ func build() -> void:
 	row.pressed.connect(func(): router.push("about"))
 	c4.add_child(row)
 	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 14)
+	h.add_theme_constant_override("separation", 12)
 	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(h)
 	var ic := Control.new()

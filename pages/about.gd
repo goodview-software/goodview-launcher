@@ -31,7 +31,7 @@ func build() -> void:
 		row.pressed.connect(func(): OS.shell_open(url))
 		c.add_child(row)
 		var h := HBoxContainer.new()
-		h.add_theme_constant_override("separation", 14)
+		h.add_theme_constant_override("separation", 12)
 		h.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_child(h)
 		var ic := Control.new()
