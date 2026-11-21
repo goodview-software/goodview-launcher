@@ -413,8 +413,41 @@ func run(test, host_page) -> void:
 	if path != "":
 		DirAccess.remove_absolute(path)
 
+	# --- raccourcis clavier
+	sc.clear()
+	b._clear_nodes()
+	sc.reset_history()
+	S.get_viewport().gui_release_focus()
+	var k1 := add("rectangle", 10, 10, 50, 50)
+	var k2 := add("ellipse", 200, 10, 50, 50)
+	t.check(tl.key(_key(KEY_R)) and tl.tool == "rectangle", "clavier : R = rectangle")
+	t.check(tl.key(_key(0, KEY_5)) and tl.tool == "arrow", "clavier : 5 = flèche")
+	t.check(tl.key(_key(KEY_ESCAPE)) and tl.tool == "select", "clavier : Échap = sélection")
+	t.check(tl.key(_key(KEY_A, 0, true)) and sc.sel.size() == 2, "clavier : Ctrl+A")
+	t.check(tl.key(_key(KEY_RIGHT, 0, false, true)) and absf(float(k1.x) - 20.0) < 0.01, "clavier : Maj+flèche = 10 px")
+	t.check(tl.key(_key(KEY_DELETE)) and sc.els.is_empty(), "clavier : Suppr")
+	t.check(tl.key(_key(KEY_Z, 0, true)) and sc.els.size() == 2, "clavier : Ctrl+Z")
+	t.check(tl.key(_key(KEY_Z, 0, true, true)) and sc.els.is_empty(), "clavier : Ctrl+Maj+Z")
+	t.check(tl.key(_key(KEY_Z, 0, true)) and tl.key(_key(KEY_Q)) and tl.locked, "clavier : Q = verrou")
+	tl.toggle_lock()
+	var kz := _key(KEY_G, 0, true)
+	k1 = sc.els[0]
+	k2 = sc.els[1]
+	sc.select([k1.id, k2.id])
+	t.check(tl.key(kz) and str(k1.group) != "" and k1.group == k2.group, "clavier : Ctrl+G groupe")
+
 	# --- nettoyage
 	sc.clear()
 	b._clear_nodes()
 	b._dirty = false
 	DirAccess.remove_absolute(b._plan_file())
+
+
+func _key(code: int, phys := 0, ctrl := false, shift := false) -> InputEventKey:
+	var e := InputEventKey.new()
+	e.keycode = code as Key
+	e.physical_keycode = phys as Key
+	e.pressed = true
+	e.ctrl_pressed = ctrl
+	e.shift_pressed = shift
+	return e
