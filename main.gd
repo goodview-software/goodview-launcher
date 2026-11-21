@@ -37,6 +37,14 @@ var page_detail: VBoxContainer
 var status: Label
 var progress: ProgressBar
 var token_edit: LineEdit
+var pseudo := ""
+var avatar_tex: Texture2D
+var chip_avatar: Avatar
+var chip_name: Label
+var prof_avatar: Avatar
+var pseudo_edit: LineEdit
+var page_profile: VBoxContainer
+var file_dlg: FileDialog
 var upd_lbl: Label
 var upd_btn: Button
 var upd_info := {}
@@ -65,11 +73,41 @@ class AppIcon extends Control:
 			draw_string(f, Vector2(0, size.y / 2.0 + fs * 0.36), letter, HORIZONTAL_ALIGNMENT_CENTER, size.x, fs, Color.WHITE)
 
 
+class Avatar extends Control:
+	var tex: Texture2D:
+		set(v):
+			tex = v
+			queue_redraw()
+	var letter := "?":
+		set(v):
+			letter = v
+			queue_redraw()
+	var badge := false:
+		set(v):
+			badge = v
+			queue_redraw()
+
+	func _draw() -> void:
+		var c := size / 2.0
+		var r := minf(size.x, size.y) / 2.0
+		if tex != null:
+			draw_texture_rect(tex, Rect2(c - Vector2(r, r), Vector2(r, r) * 2.0), false)
+		else:
+			draw_circle(c, r, Color("2fb88f"))
+			var fs := int(r * 1.1)
+			draw_string(ThemeDB.fallback_font, Vector2(0, c.y + fs * 0.36), letter, HORIZONTAL_ALIGNMENT_CENTER, size.x, fs, Color.WHITE)
+		draw_arc(c, r - 0.8, 0.0, TAU, 48, Color(1, 1, 1, 0.14), 1.5, true)
+		if badge:
+			draw_circle(c + Vector2(r * 0.72, -r * 0.72), r * 0.27, Color("ff6b6b"))
+
+
 # ------------------------------------------------------------------ Démarrage
 
 func _ready() -> void:
 	_load_state()
+	_load_avatar()
 	_build_ui()
+	_refresh_account()
 	_show_list()
 	refresh()
 	_check_update()
@@ -152,12 +190,27 @@ func _build_ui() -> void:
 	col.add_child(th)
 	var title := _label("Goodview Software", 30, C_TEXT, th)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	upd_lbl = _label("", 14, C_DIM, th)
-	upd_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	upd_btn = Button.new()
-	upd_btn.visible = false
-	upd_btn.pressed.connect(_do_update)
-	th.add_child(upd_btn)
+	title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var chip := PanelContainer.new()
+	chip.add_theme_stylebox_override("panel", _style(C_CARD, 26, 6))
+	chip.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	chip.gui_input.connect(func(e: InputEvent):
+		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+			_show_profile())
+	var ch := HBoxContainer.new()
+	ch.add_theme_constant_override("separation", 10)
+	ch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chip.add_child(ch)
+	chip_avatar = Avatar.new()
+	chip_avatar.custom_minimum_size = Vector2(38, 38)
+	chip_avatar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ch.add_child(chip_avatar)
+	chip_name = _label("", 16, C_TEXT, ch)
+	chip_name.autowrap_mode = TextServer.AUTOWRAP_OFF
+	chip_name.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	chip_name.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chip_name.add_theme_constant_override("margin_right", 6)
+	th.add_child(chip)
 
 	page_list = VBoxContainer.new()
 	page_list.add_theme_constant_override("separation", 12)
@@ -165,25 +218,24 @@ func _build_ui() -> void:
 	list_box = VBoxContainer.new()
 	list_box.add_theme_constant_override("separation", 10)
 	page_list.add_child(list_box)
-	var bar := HBoxContainer.new()
-	page_list.add_child(bar)
-	token_edit = LineEdit.new()
-	token_edit.placeholder_text = "Token GitHub (repos privés, optionnel)"
-	token_edit.secret = true
-	token_edit.text = token
-	token_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bar.add_child(token_edit)
-	var rb := Button.new()
-	rb.text = "Actualiser"
-	rb.pressed.connect(func():
-		token = token_edit.text.strip_edges()
-		_save_state()
-		refresh())
-	bar.add_child(rb)
 
 	page_detail = VBoxContainer.new()
 	page_detail.add_theme_constant_override("separation", 16)
 	col.add_child(page_detail)
+
+	page_profile = VBoxContainer.new()
+	page_profile.add_theme_constant_override("separation", 18)
+	page_profile.visible = false
+	col.add_child(page_profile)
+	_build_profile()
+
+	file_dlg = FileDialog.new()
+	file_dlg.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	file_dlg.access = FileDialog.ACCESS_FILESYSTEM
+	file_dlg.use_native_dialog = true
+	file_dlg.filters = PackedStringArray(["*.png, *.jpg, *.jpeg, *.webp ; Images"])
+	file_dlg.file_selected.connect(_set_avatar)
+	add_child(file_dlg)
 
 	progress = ProgressBar.new()
 	progress.show_percentage = false
@@ -191,6 +243,131 @@ func _build_ui() -> void:
 	progress.visible = false
 	col.add_child(progress)
 	status = _label("", 14, C_DIM, col)
+
+
+func _build_profile() -> void:
+	var back := Button.new()
+	back.text = "‹  Catalogue"
+	back.flat = true
+	back.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	back.pressed.connect(func():
+		_commit_profile()
+		_show_list())
+	page_profile.add_child(back)
+	var top := VBoxContainer.new()
+	top.alignment = BoxContainer.ALIGNMENT_CENTER
+	top.add_theme_constant_override("separation", 14)
+	page_profile.add_child(top)
+	prof_avatar = Avatar.new()
+	prof_avatar.custom_minimum_size = Vector2(140, 140)
+	prof_avatar.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	prof_avatar.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	prof_avatar.gui_input.connect(func(e: InputEvent):
+		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+			file_dlg.popup_centered_ratio(0.6))
+	top.add_child(prof_avatar)
+	var pb := Button.new()
+	pb.text = "Changer l'image"
+	pb.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	pb.pressed.connect(func(): file_dlg.popup_centered_ratio(0.6))
+	top.add_child(pb)
+	pseudo_edit = LineEdit.new()
+	pseudo_edit.placeholder_text = "Pseudo"
+	pseudo_edit.max_length = 24
+	pseudo_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pseudo_edit.add_theme_font_size_override("font_size", 22)
+	pseudo_edit.custom_minimum_size = Vector2(300, 52)
+	pseudo_edit.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	pseudo_edit.text_submitted.connect(func(_t: String): _commit_profile())
+	pseudo_edit.focus_exited.connect(_commit_profile)
+	top.add_child(pseudo_edit)
+
+	var card := PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _style(C_CARD, 18, 16))
+	page_profile.add_child(card)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 12)
+	card.add_child(v)
+	var vr := HBoxContainer.new()
+	v.add_child(vr)
+	upd_lbl = _label("v" + VERSION, 15, C_DIM, vr)
+	upd_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	upd_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	upd_btn = Button.new()
+	upd_btn.visible = false
+	upd_btn.pressed.connect(_do_update)
+	vr.add_child(upd_btn)
+	token_edit = LineEdit.new()
+	token_edit.placeholder_text = "Token GitHub (repos privés)"
+	token_edit.secret = true
+	token_edit.text = token
+	token_edit.custom_minimum_size = Vector2(0, 46)
+	token_edit.text_submitted.connect(func(_t: String): _commit_profile())
+	token_edit.focus_exited.connect(_commit_profile)
+	v.add_child(token_edit)
+
+
+func _commit_profile() -> void:
+	var np := pseudo_edit.text.strip_edges()
+	var nt := token_edit.text.strip_edges()
+	var retoken := nt != token
+	if np != "":
+		pseudo = np
+	token = nt
+	_save_state()
+	_refresh_account()
+	if retoken:
+		refresh()
+
+
+func _refresh_account() -> void:
+	if pseudo == "":
+		var u := OS.get_environment("USER").capitalize()
+		pseudo = u if u != "" else "Invité"
+	chip_name.text = pseudo
+	for a in [chip_avatar, prof_avatar]:
+		if a != null:
+			a.tex = avatar_tex
+			a.letter = pseudo.substr(0, 1).to_upper()
+	if pseudo_edit != null:
+		pseudo_edit.text = pseudo
+
+
+func _load_avatar() -> void:
+	var path := ProjectSettings.globalize_path("user://avatar.png")
+	if not FileAccess.file_exists(path):
+		return
+	var im := Image.load_from_file(path)
+	if im == null:
+		return
+	im.convert(Image.FORMAT_RGBA8)
+	im.resize(128, 128, Image.INTERPOLATE_LANCZOS)
+	for y in 128:
+		for x in 128:
+			if Vector2(x - 63.5, y - 63.5).length() > 64.0:
+				im.set_pixel(x, y, Color(0, 0, 0, 0))
+	avatar_tex = ImageTexture.create_from_image(im)
+
+
+func _set_avatar(path: String) -> void:
+	var im := Image.load_from_file(path)
+	if im == null:
+		status.text = "Image illisible."
+		return
+	var side := mini(im.get_width(), im.get_height())
+	im = im.get_region(Rect2i((im.get_width() - side) / 2, (im.get_height() - side) / 2, side, side))
+	im.resize(256, 256, Image.INTERPOLATE_LANCZOS)
+	im.save_png(ProjectSettings.globalize_path("user://avatar.png"))
+	_load_avatar()
+	_refresh_account()
+
+
+func _show_profile() -> void:
+	cur_app = {}
+	page_list.visible = false
+	page_detail.visible = false
+	page_profile.visible = true
+	_refresh_account()
 
 
 func _fit_width() -> void:
@@ -202,6 +379,7 @@ func _show_list() -> void:
 	cur_app = {}
 	page_list.visible = true
 	page_detail.visible = false
+	page_profile.visible = false
 	_render_list()
 
 
@@ -288,6 +466,7 @@ func _state_text(a: Dictionary) -> String:
 func _show_detail(a: Dictionary) -> void:
 	cur_app = a
 	page_list.visible = false
+	page_profile.visible = false
 	page_detail.visible = true
 	_render_detail()
 	DisplayServer.window_set_title(_title(a) + " · Goodview Launcher")
@@ -626,6 +805,7 @@ func _load_state() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(CFG_FILE) == OK:
 		token = cfg.get_value("github", "token", "")
+		pseudo = str(cfg.get_value("profile", "pseudo", ""))
 
 
 func _save_state() -> void:
@@ -634,6 +814,7 @@ func _save_state() -> void:
 	f.close()
 	var cfg := ConfigFile.new()
 	cfg.set_value("github", "token", token)
+	cfg.set_value("profile", "pseudo", pseudo)
 	cfg.save(CFG_FILE)
 
 
@@ -658,6 +839,7 @@ func _on_version_json(result: int, code: int, _h: PackedStringArray, body: Packe
 		upd_lbl.text = "✓ v" + VERSION
 		return
 	upd_info = info
+	chip_avatar.badge = true
 	var v := Engine.get_version_info()
 	var same: bool = str(info.get("godot", "")) == "%d.%d.%d" % [v.major, v.minor, v.patch]
 	upd_btn.visible = true
