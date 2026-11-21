@@ -49,8 +49,8 @@ func _ready() -> void:
 	edit.placeholder_text = "Ton pseudo"
 	edit.max_length = 24
 	edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
-	edit.add_theme_font_size_override("font_size", 22)
-	edit.custom_minimum_size = Vector2(300, 54)
+	edit.add_theme_font_size_override("font_size", 24)
+	edit.custom_minimum_size = Vector2(240, 56)
 	edit.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	edit.text = ctx.store.pseudo
 	edit.text_submitted.connect(func(_t: String): commit())

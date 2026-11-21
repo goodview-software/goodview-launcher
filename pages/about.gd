@@ -17,6 +17,14 @@ func _init() -> void:
 func build() -> void:
 	var sv := W.StateView.new("idle", ctx.active, "Goodview Launcher", "Version " + ctx.VERSION, "", 170)
 	body.add_child(sv)
+	var taps := [0]
+	sv.mouse_filter = Control.MOUSE_FILTER_STOP
+	sv.gui_input.connect(func(e: InputEvent):
+		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+			taps[0] += 1
+			if taps[0] >= 5:
+				taps[0] = 0
+				router.push("kit"))
 	_upd_box = VBoxContainer.new()
 	_upd_box.add_theme_constant_override("separation", 12)
 	body.add_child(_upd_box)

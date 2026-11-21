@@ -91,14 +91,12 @@ func build() -> void:
 		tl.text = "auto")
 	c2.add_child(ab)
 	W.hsep(c2)
-	var r2 := W.setting_row(c2, "Contexte (tokens)", "")
+	W.label("Contexte (tokens)", 16, T.TEXT, c2)
 	var opts := [[2048, "2k"], [4096, "4k"], [8192, "8k"], [16384, "16k"]]
 	var cur := int(ctx.store.get_s("chat", "num_ctx", 4096))
 	var seg := W.Seg.new(opts.map(func(o): return [str(o[0]), o[1]]), str(cur))
-	seg.custom_minimum_size = Vector2(240, 38)
-	seg.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	seg.changed.connect(func(id: String): ctx.store.set_s("chat", "num_ctx", int(id)))
-	r2.add_child(seg)
+	c2.add_child(seg)
 	W.hsep(c2)
 	W.label("URL d'Ollama (reste sur ce PC)", 15, T.DIM, c2)
 	var ue: Control = K.InputField.new()
@@ -158,10 +156,12 @@ func _fill_models() -> void:
 		W.label("Aucun modèle détecté (Ollama est-il lancé ?)", 14, T.DIM, _models_box)
 		return
 	for m in ctx.models:
-		var h := HBoxContainer.new()
-		_models_box.add_child(h)
-		var l := W.label(m.name, 15, T.TEXT, h)
-		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var mv := VBoxContainer.new()
+		mv.add_theme_constant_override("separation", 0)
+		_models_box.add_child(mv)
+		W.label(m.name, 15, T.TEXT, mv)
+		var h: Control = K.Row.new()
+		mv.add_child(h)
 		if U.is_broken(m.name):
 			W.pill(h, "incompatible", T.BAD)
 		elif ctx.model_is_vision(m.name):

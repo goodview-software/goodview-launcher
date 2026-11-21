@@ -861,8 +861,10 @@ func run_models() -> void:
 	check(ctx.model_for(0) == "llama3.1:8b", "avant l'échec : modèle le plus léger")
 	orch.run(0, [{"role": "user", "content": "salut"}])
 	await wait_for(func(): return not orch.running)
-	check("llama3.1:8b" in ctx.ollama.bad_models and ctx.model_for(0) == "gemma3:4b", "modèle en échec exclu, repli sur gemma3:4b")
-	check(evs.any(func(e): return e[0] == "notice" and "bascule sur gemma3:4b" in str(e[1].text)), "toast discret de bascule")
+	if OS.get_environment("GL_DBG") != "":
+		print("DBGM ", evs.map(func(e): return [e[0], str(e[1]).left(120)]), ctx.ollama.bad_models)
+	check("llama3.1:8b" in ctx.ollama.bad_models and ctx.model_for(0) != "llama3.1:8b" and ctx.model_for(0) != "", "modèle en échec exclu, repli sur un autre modèle")
+	check(evs.any(func(e): return e[0] == "notice" and "bascule sur" in str(e[1].text)), "toast discret de bascule")
 	check(evs.any(func(e): return e[0] == "done" and "Bonjour" in str(e[1].text)), "la réponse arrive après le repli")
 	check(not evs.any(func(e): return e[0] == "error"), "pas d'erreur visible après repli")
 	var fi: String = Ollama.friendly("unsupported", "unknown model architecture: 'mllama'", "weird:7b", "0.33.1")

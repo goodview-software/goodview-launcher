@@ -37,7 +37,7 @@ func build() -> void:
 		sv.action.connect(func(): router.back())
 		body.add_child(sv)
 		return
-	set_title(Catalog.title(a))
+	page_title = Catalog.title(a)  # titre de fenêtre ; le nom est déjà affiché dans le corps de la page
 	_content(a)
 
 
@@ -143,12 +143,12 @@ func _content(a: Dictionary) -> void:
 			el.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			el.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			el.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		var mb := _main_button(a, status)
+		mb.size_flags_horizontal = Control.SIZE_FILL
+		_main.add_child(mb)
 		var ar := HBoxContainer.new()
 		ar.add_theme_constant_override("separation", 8)
 		_main.add_child(ar)
-		var mb := _main_button(a, status)
-		mb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		ar.add_child(mb)
 		var fav := ctx.store.is_fav(app_name)
 		var st := W.IconBtn.new("star_on" if fav else "star", 44)
 		st.col = T.WARN if fav else T.TEXT
@@ -461,8 +461,8 @@ func _apk_card(a: Dictionary) -> void:
 	W.label("Téléphone", 18, T.TEXT, qc)
 	var qr_url := str(apk.browser_download_url)
 	var qt: Texture2D = QR.texture(qr_url, 6)
-	var qh := HBoxContainer.new()
-	qh.add_theme_constant_override("separation", 16)
+	var qh: Control = K.Row.new()
+	qh.gap = Tk.S4
 	qc.add_child(qh)
 	if qt != null:
 		var fr := PanelContainer.new()

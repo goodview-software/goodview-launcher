@@ -2,10 +2,15 @@ extends "res://kit/layout/k_page.gd"
 ## Galerie : chaque composant dans chaque état, pour relecture humaine. Utilisable seule (gallery.tscn) ou comme page.
 const K := preload("res://kit/k.gd")
 var toaster: Control
+var embedded := false
+var popup_host: Node
 
 func _ready() -> void:
-	build_shell()
-	set_title("Kit Goodview")
+	if not embedded:
+		build_shell()
+		set_title("Kit Goodview")
+	if popup_host == null:
+		popup_host = self
 	_build()
 
 func _sec(title: String, sub := "") -> VBoxContainer:
@@ -24,7 +29,7 @@ func _row(parent: Node) -> Control:
 
 func _build() -> void:
 	toaster = K.Toast.new()
-	add_child(toaster)
+	popup_host.add_child(toaster)
 	# Couleurs
 	var c := _sec("Couleurs", "Accent, échelle 50 à 950, surfaces, états")
 	var pr := _row(c)
@@ -161,10 +166,10 @@ func _build() -> void:
 		m.add_text("Contenu de la modale, avec des boutons alignés à droite.")
 		m.add_button("Annuler", "secondary", "")
 		m.add_button("Valider", "primary", "ok")
-		m.popup(self))
+		m.popup(popup_host))
 	pr2.add_child(mb)
 	var db: Control = K.Btn.make("Dialogue danger", "danger")
-	db.pressed.connect(func(): K.Dialog.confirm(self, "Supprimer ?", "Cette action est définitive.", "Supprimer", true))
+	db.pressed.connect(func(): K.Dialog.confirm(popup_host, "Supprimer ?", "Cette action est définitive.", "Supprimer", true))
 	pr2.add_child(db)
 	var sb: Control = K.Btn.make("Feuille", "secondary")
 	sb.pressed.connect(func():
@@ -172,10 +177,10 @@ func _build() -> void:
 		m.title = "Feuille"
 		m.add_text("Monte du bas de l'écran.")
 		m.add_button("Fermer", "primary", "")
-		m.popup(self))
+		m.popup(popup_host))
 	pr2.add_child(sb)
 	var mn: Control = K.Btn.make("Menu", "secondary", "md", "ellipsis")
-	mn.pressed.connect(func(): K.Menu.open(self, [{"id": "a", "label": "Renommer", "icon": "pencil"}, {"id": "b", "label": "Copier", "icon": "copy"}, {"sep": true}, {"id": "c", "label": "Supprimer", "icon": "trash-2", "danger": true}], mn.get_global_rect()))
+	mn.pressed.connect(func(): K.Menu.open(popup_host, [{"id": "a", "label": "Renommer", "icon": "pencil"}, {"id": "b", "label": "Copier", "icon": "copy"}, {"sep": true}, {"id": "c", "label": "Supprimer", "icon": "trash-2", "danger": true}], mn.get_global_rect()))
 	pr2.add_child(mn)
 	var tb: Control = K.Btn.make("Toast", "secondary")
 	tb.pressed.connect(func(): toaster.push("Enregistré", "success"))

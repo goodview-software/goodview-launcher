@@ -18,7 +18,7 @@ var blur := true
 var scrim: ColorRect
 var card: PanelContainer
 var body: VBoxContainer
-var foot: HBoxContainer
+var foot: HFlowContainer
 var scroll: ScrollContainer
 var closing := false
 var _inner: VBoxContainer
@@ -72,8 +72,10 @@ func _ensure() -> void:
 	_inner.add_child(scroll)
 	body = KS.vbox(scroll, Tokens.S3)
 	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	foot = KS.hbox(_inner, Tokens.S2)
-	foot.alignment = BoxContainer.ALIGNMENT_END
+	foot = load("res://kit/layout/k_row.gd").new()
+	_inner.add_child(foot)
+	foot.alignment = FlowContainer.ALIGNMENT_END
+	foot.last_wrap_alignment = FlowContainer.LAST_WRAP_ALIGNMENT_END
 	foot.visible = false
 
 func add_text(t: String, muted := true) -> Label:

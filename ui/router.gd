@@ -15,6 +15,7 @@ const PAGES := {
 	"chat": preload("res://pages/chat.gd"),
 	"chat_history": preload("res://pages/chat_history.gd"),
 	"chat_settings": preload("res://pages/chat_settings.gd"),
+	"kit": preload("res://pages/kit_page.gd"),
 }
 const TABS := ["home", "chat", "profile"]  # pages racines de la barre de navigation (conservées en mémoire)
 const Nav := preload("res://ui/nav.gd")
