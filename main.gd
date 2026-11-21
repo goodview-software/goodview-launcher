@@ -17,6 +17,7 @@ const STATE_FILE := "user://installed.json"
 const CFG_FILE := "user://settings.cfg"
 const EXCLUDED := [".github", "goodview-launcher"]
 
+const QR := preload("res://qr.gd")
 const C_BG := Color("0e1116")
 const C_CARD := Color("171b22")
 const C_CARD_HI := Color("1e242d")
@@ -103,6 +104,9 @@ class Ico:
 				ci.draw_rect(Rect2(c + Vector2(-18, -15) * k, Vector2(36, 24) * k), col, false, w)
 				ci.draw_line(c + Vector2(0, 9) * k, c + Vector2(0, 17) * k, col, w, true)
 				ci.draw_line(c + Vector2(-8, 17) * k, c + Vector2(8, 17) * k, col, w, true)
+			"phone":
+				ci.draw_rect(Rect2(c + Vector2(-11, -19) * k, Vector2(22, 38) * k), col, false, w)
+				ci.draw_line(c + Vector2(-3, 13) * k, c + Vector2(3, 13) * k, col, w, true)
 			"check":
 				ci.draw_polyline(PackedVector2Array([c + Vector2(-12, 0) * k, c + Vector2(-4, 9) * k,
 						c + Vector2(13, -9) * k]), col, 4.0 * k, true)
@@ -704,6 +708,44 @@ func _render_detail() -> void:
 			install(a))
 	page_detail.add_child(main)
 
+	# QR code : télécharger l'APK avec le téléphone
+	var apk := _pick_apk(a.release)
+	if not apk.is_empty():
+		var qc := _card(page_detail)
+		var qr_url := str(apk.browser_download_url)
+		var qt: Texture2D = QR.texture(qr_url, 6)
+		var qh := HBoxContainer.new()
+		qh.add_theme_constant_override("separation", 18)
+		qc.add_child(qh)
+		if qt != null:
+			var fr := PanelContainer.new()
+			fr.add_theme_stylebox_override("panel", _style(Color.WHITE, 16, 6))
+			fr.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			qh.add_child(fr)
+			var tr := TextureRect.new()
+			tr.texture = qt
+			tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			tr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+			tr.custom_minimum_size = Vector2(170, 170)
+			tr.tooltip_text = "Scanne avec ton téléphone"
+			fr.add_child(tr)
+		var qv := VBoxContainer.new()
+		qv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		qv.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		qv.alignment = BoxContainer.ALIGNMENT_CENTER
+		qv.add_theme_constant_override("separation", 12)
+		qh.add_child(qv)
+		var ph := IconBtn.new("phone", 64)
+		ph.tooltip_text = "Télécharger l'APK (Android)"
+		ph.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		ph.pressed.connect(func(): OS.shell_open(qr_url))
+		qv.add_child(ph)
+		var pr := HBoxContainer.new()
+		pr.alignment = BoxContainer.ALIGNMENT_CENTER
+		qv.add_child(pr)
+		_pill(pr, "APK · %.0f Mo" % (float(apk.get("size", 0)) / 1048576.0), C_DIM)
+
 	# réglages en icônes (comme Pocket Speaker)
 	var card := _card(page_detail)
 	var r1 := HBoxContainer.new()
@@ -762,6 +804,13 @@ func _render_detail() -> void:
 	var notes := str(a.release.get("body", "")).strip_edges()
 	if notes != "":
 		_section("Nouveautés · " + tag, notes.left(900))
+
+
+func _pick_apk(release: Dictionary) -> Dictionary:
+	for x in release.get("assets", []):
+		if str(x.name).to_lower().ends_with(".apk"):
+			return x
+	return {}
 
 
 func _check_text(a: Dictionary) -> String:
