@@ -14,7 +14,7 @@ var _save_timer: Timer
 
 func _ready() -> void:
 	theme = T.make_theme()
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	if OS.get_environment("GL_TEST") == "1" and ResourceLoader.exists("res://test_run.gd"):
 		var runner: Node = load("res://test_run.gd").new()
 		add_child(runner)

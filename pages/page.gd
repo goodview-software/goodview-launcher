@@ -22,7 +22,7 @@ var _center: CenterContainer
 
 func _ready() -> void:
 	var outer := VBoxContainer.new()
-	outer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	outer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	outer.add_theme_constant_override("separation", 10)
 	add_child(outer)
 	var hm := MarginContainer.new()

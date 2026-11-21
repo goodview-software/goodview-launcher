@@ -24,13 +24,13 @@ var _tweens := {}
 
 
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var bg := ColorRect.new()
 	bg.color = T.BG
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 	stage = Control.new()
-	stage.set_anchors_preset(Control.PRESET_FULL_RECT)
+	stage.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	stage.clip_contents = true
 	add_child(stage)
 	_toast = W.Toast.new()
@@ -55,7 +55,7 @@ func _make(id: String, args: Dictionary) -> Control:
 	n.ctx = ctx
 	n.args = args
 	n.router = self
-	n.set_anchors_preset(Control.PRESET_FULL_RECT)
+	n.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	stage.add_child(n)
 	return n
 
