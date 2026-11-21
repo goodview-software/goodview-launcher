@@ -13,6 +13,8 @@ const Surface := preload("res://ui/draw/surface.gd")
 const Bars := preload("res://ui/draw/bars.gd")
 const Geom := preload("res://ui/draw/geom.gd")
 const Assist := preload("res://ui/draw/assist.gd")
+const Chat := preload("res://ui/draw/chat.gd")
+const ChatBar := preload("res://ui/draw/chatbar.gd")
 const MAX_TOOL_ROUNDS := 4
 const FILE := "user://board.json"  # ancien fichier unique (migré vers le plan 1)
 const PLANS_DIR := "user://boards/"
@@ -67,6 +69,7 @@ var plan_id := ""
 var search_e: LineEdit
 var help_btn: Button
 var assist
+var chat_bar
 var help_panel: PanelContainer
 var help_txt: RichTextLabel
 var _rename: ConfirmationDialog
@@ -132,6 +135,7 @@ func build() -> void:
 	scene.on_clone = _on_clone
 	scene.zone_added.connect(_spawn)
 	scene.zone_removed.connect(_on_zone_removed)
+	scene.msg_removed.connect(_on_zone_removed)  # même nettoyage : annule la requête d'un nœud de chat supprimé
 	bars = Bars.new()
 	canvas.add_child(bars)
 	bars.setup(canvas)
@@ -184,16 +188,19 @@ func build() -> void:
 	assist = Assist.new()
 	canvas.add_child(assist)
 	assist.setup(self)
+	chat_bar = ChatBar.new()
+	canvas.add_child(chat_bar)
+	chat_bar.setup(self)
 	var ai_btn := Button.new()
 	ai_btn.text = "✨"
-	ai_btn.tooltip_text = "Assistant du graphe (Entrée) : crée et modifie des schémas sur demande"
+	ai_btn.tooltip_text = "Parler à l'IA (Entrée : chat en nœuds · Ctrl+Entrée : éditer le graphe)"
 	ai_btn.custom_minimum_size = Vector2(44, 44)
 	ai_btn.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	ai_btn.offset_left = -108
 	ai_btn.offset_right = -64
 	ai_btn.offset_top = 10
 	ai_btn.offset_bottom = 54
-	ai_btn.pressed.connect(open_assist)
+	ai_btn.pressed.connect(func(): open_assist("chat"))
 	canvas.add_child(ai_btn)
 	_rename = ConfirmationDialog.new()
 	_rename.title = "Renommer le plan"
@@ -234,10 +241,10 @@ func _exit_tree() -> void:
 
 
 ## Les zones (éléments de type « zone » de la scène), dans l'ordre des calques.
-## Entrée sur le tableau : ouvre l'assistant du graphe.
-func open_assist() -> void:
+## Entrée sur le tableau : ouvre la barre de saisie (mode "chat" : nœuds de conversation ; "graph" : édition du graphe).
+func open_assist(mode := "chat") -> void:
 	if assist != null:
-		assist.open()
+		assist.open(mode)
 
 
 func zones() -> Array:
@@ -584,6 +591,8 @@ func _system(d: Dictionary, who := -1) -> String:
 
 func _model(d: Dictionary, who := -1) -> String:
 	var ai_i := int(d.ai) if who < 0 else who
+	if str(d.get("model", "")) != "":  # un nœud de chat peut imposer son modèle
+		return str(d.model)
 	if d.kind == "image":
 		var m := ctx.model_for(ai_i)
 		if ctx.model_is_vision(m):
@@ -776,6 +785,135 @@ func _finish(id: String) -> void:
 	reqs.erase(id)
 	_refresh_all()
 	_touch()
+
+
+# ------------------------------------------------------------------ Chat en nœuds
+
+## Aspect d'un nœud de chat : couleur et nom (toi / l'assistant).
+func msg_style(el: Dictionary) -> Dictionary:
+	if str(el.get("role", "user")) == "user":
+		return {"color": T.DIM.lightened(0.15), "name": "Toi"}
+	var ai := int(el.get("ai", 0))
+	return {"color": U.color(ai), "name": str(U.get_u(ai).name)}
+
+
+func _ai_name(i: int) -> String:
+	return str(U.get_u(i).name)
+
+
+func _chat_system(ai: int) -> String:
+	return U.system_prompt(ai, false) + "\nTu discutes dans un arbre de conversation : chaque message est un nœud du plan et tu ne vois que le chemin qui mène au dernier message. Sois concis."
+
+
+func _view_spot() -> Vector2:
+	if canvas != null and canvas.size.x > 10.0:
+		return canvas.c2w(canvas.size * 0.5) - Vector2(Chat.W * 0.5, 120.0)
+	return Vector2(40, 40)
+
+
+func _chat_focus(el: Dictionary) -> void:
+	scene.select([el.id])
+	canvas.sel_changed.emit()
+	canvas.ensure_visible(Rect2(float(el.x), float(el.y), float(el.w), minf(float(el.h), 320.0)))
+	_touch()
+
+
+## J'écris : un nœud « utilisateur » apparaît (réponse au nœud parent_id, ou nouvelle racine), puis l'IA répond en
+## streaming dans un nœud enfant. Retourne le nœud de l'IA (la coroutine se termine quand la réponse est finie).
+func chat_say(text: String, parent_id := "", ai := -1, fork := false) -> Dictionary:
+	text = text.strip_edges()
+	if text == "":
+		return {}
+	if ai < 0:
+		ai = int(ctx.active)
+	var u: Dictionary = Chat.add_msg(scene, "user", text, parent_id, ai, fork, _view_spot())
+	var a: Dictionary = Chat.add_msg(scene, "assistant", "", str(u.id), ai)
+	_chat_focus(a)
+	await _chat_answer(a)
+	return a
+
+
+## Régénérer : nouvelle réponse (nouveau frère) au même message ; pour un nœud « utilisateur », une réponse enfant.
+func chat_regen(id: String, ai := -1) -> Dictionary:
+	var el: Dictionary = scene.get_el(id)
+	if not Chat.is_msg(el):
+		return {}
+	var u: Dictionary = el if str(el.role) == "user" else Chat.parent_of(scene, el)
+	if u.is_empty():
+		return {}
+	if ai < 0:
+		ai = int(el.get("ai", ctx.active))
+	var a: Dictionary = Chat.add_msg(scene, "assistant", "", str(u.id), ai)
+	_chat_focus(a)
+	await _chat_answer(a)
+	return a
+
+
+func _chat_answer(a: Dictionary) -> void:
+	var id := str(a.id)
+	var u: Dictionary = Chat.parent_of(scene, a)
+	if u.is_empty():
+		return
+	var ai := int(a.get("ai", 0))
+	a["done"] = false
+	a["text"] = ""
+	var msgs: Array = Chat.history(scene, str(u.id), _chat_system(ai), ai, _ai_name)
+	scene.mark(a)
+	var setter := func(t: String):
+		if scene.by_id.get(id, {}) != a:  # nœud supprimé (ou annulé) pendant l'écriture
+			chat_stop(id)
+			return
+		a["text"] = t
+		scene.mark(a)
+		Chat.layout(scene, a)
+		_touch()
+	await _stream(a, msgs, setter, ai)
+	if not is_instance_valid(self) or scene.by_id.get(id, {}) != a:
+		return
+	if str(a.text).strip_edges() == "":
+		a["text"] = "(arrêté)"
+	a["done"] = true
+	scene.mark(a)
+	Chat.layout(scene, a)
+	Chat.push_down(scene, a)
+	scene.commit()  # toute la demande (nœud utilisateur + réponse) = une étape Ctrl+Z
+	canvas.sel_changed.emit()
+	_touch()
+
+
+func chat_stop(id: String) -> void:
+	var r = reqs.get(id)
+	if r != null:
+		(r as Ollama.Req).cancel()
+	elif reqs.has(id):
+		reqs.erase(id)
+
+
+func chat_busy(id: String) -> bool:
+	return reqs.has(id)
+
+
+## Ouvre la barre de saisie pour répondre au nœud id (fork : nouvelle branche, placée à droite des réponses existantes).
+func chat_reply(id: String, fork := false) -> void:
+	if id != "" and Chat.is_msg(scene.get_el(id)):
+		scene.select([id])
+		canvas.sel_changed.emit()
+	if assist != null:
+		assist.open("chat")
+		assist.fork = fork
+		assist._sync_target()
+
+
+func chat_tidy() -> void:
+	var sel: Array = scene.selected().filter(func(e): return Chat.is_msg(e))
+	var rs: Array = [Chat.root_of(scene, str(sel[0].id))] if not sel.is_empty() else Chat.roots(scene)
+	var moved: Array = []
+	for r in rs:
+		moved.append_array(Chat.tidy(scene, str(r.id)))
+	if not moved.is_empty():
+		scene.commit()
+		scene.touch()
+		_touch()
 
 
 # ------------------------------------------------------------------ Cartes proposées (pistes)
@@ -1182,7 +1320,8 @@ func _fill_help() -> void:
 	out.append("[color=#%s]■ critique[/color] : l'arrivée critique la source (faiblesses, risques, oublis)." % acc)
 	out.append("[color=#%s]■ compare[/color] : l'arrivée met plusieurs sources en balance, critère par critère. [b]Il faut au moins 2 fils compare vers la même zone.[/b]" % acc)
 	out.append("[color=#%s]■ fusionne[/color] : l'arrivée réunit plusieurs sources en une seule proposition et règle leurs contradictions. [b]Au moins 2 fils aussi.[/b]\n" % acc)
-	out.append("[b]Entrée[/b] sur le tableau ouvre l'[b]assistant du graphe[/b] (✨) : demande-lui un schéma ou une modification ; Ctrl+Z annule tout ce qu'il vient de faire.\n")
+	out.append("[b]Entrée[/b] sur le tableau : on discute avec l'IA [b]en nœuds[/b]. Ton message est un nœud, la réponse un nœud enfant ; sélectionne n'importe quel nœud puis Entrée pour y répondre (branche). Le chemin racine → nœud sélectionné est mis en relief et c'est lui que le modèle reçoit.")
+	out.append("[b]Ctrl+Entrée[/b] (ou Maj+Entrée, ou le bouton « Éditer le graphe ») : l'[b]assistant du graphe[/b] crée et modifie des schémas ; Ctrl+Z annule tout ce qu'il vient de faire.\n")
 	out.append("Ensuite, le bouton [b]Lancer[/b] de la zone d'arrivée démarre l'IA. Si une source change après coup : bordure orange ⚠ et bouton [b]Relancer[/b].\n")
 	out.append("[b][color=#%s]Dans ton plan[/color][/b]" % acc)
 	if links().is_empty():
@@ -1244,6 +1383,8 @@ func _match(d: Dictionary, q: String) -> bool:
 
 func _apply_search(q: String) -> void:
 	q = q.strip_edges().to_lower()
+	scene.search_q = q
+	canvas.redraw()
 	for d in zones():
 		if nodes.has(d.id):
 			var dim := 1.0 if _match(d, q) else 0.25
@@ -1256,6 +1397,12 @@ func _goto_first_match() -> void:
 	for d in zones():
 		if q != "" and _match(d, q):
 			focus_zone(str(d.id))
+			return
+	for m in scene.msgs():
+		if q != "" and Chat.matches(m, q):
+			scene.select([m.id])
+			canvas.sel_changed.emit()
+			canvas.center_on(Geom.center(m), maxf(canvas.t_zoom, 0.6))
 			return
 
 
@@ -1284,6 +1431,7 @@ func export_markdown() -> void:
 			for m in d.msgs:
 				out.append("**%s** : %s\n" % ["Toi" if m.role == "user" else str(U.get_u(int(d.ai)).name), str(m.content).strip_edges()])
 		out.append("")
+	out.append_array(Chat.markdown(scene, _ai_name))
 	var dir := OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS)
 	if dir == "":
 		dir = OS.get_environment("HOME")

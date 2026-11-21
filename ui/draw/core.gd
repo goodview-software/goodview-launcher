@@ -3,6 +3,7 @@ extends RefCounted
 ## aimantation, tracés, flèches liées. Les actions (presse-papiers, ordre, styles, menu, clavier) sont dans tools.gd.
 
 const Geom := preload("res://ui/draw/geom.gd")
+const Chat := preload("res://ui/draw/chat.gd")
 const PREFIX := "gvplan:"
 const DRAW := ["rectangle", "diamond", "ellipse", "arrow", "line", "freedraw", "frame"]
 const KEYS := {KEY_V: "select", KEY_H: "hand", KEY_R: "rectangle", KEY_D: "diamond", KEY_O: "ellipse", KEY_A: "arrow", KEY_L: "line",
@@ -150,7 +151,7 @@ func bind_target(wp: Vector2, except := "") -> String:
 
 func _rotatable(els: Array) -> bool:
 	for el in els:
-		if el.type in ["zone", "frame", "arrow", "line"]:
+		if el.type in ["zone", "frame", "arrow", "line", "msg"]:
 			return false
 	return true
 
@@ -472,6 +473,10 @@ func _dbl(el: Dictionary) -> void:
 		"zone":
 			if S.lod:
 				S.host.focus_zone(str(el.id))
+		"msg":
+			sc.select([el.id])
+			S.sel_changed.emit()
+			S.host.chat_reply(str(el.id))
 
 
 func select_only(id: String) -> void:
@@ -671,6 +676,8 @@ func _min_size(el: Dictionary) -> Vector2:
 			return Vector2(250, 190)
 		"frame":
 			return Vector2(120, 80)
+		"msg":
+			return Vector2(Chat.MIN_W, 60)
 	return Vector2(4, 4)
 
 
@@ -984,7 +991,7 @@ func _erase_at(wp: Vector2) -> void:
 	var tol: float = 6.0 / S.zoom
 	for i in range(sc.els.size() - 1, -1, -1):
 		var el: Dictionary = sc.els[i]
-		if el.locked or el.type == "zone" or el.type == "frame" or erase_set.has(el.id):
+		if el.locked or el.type == "zone" or el.type == "frame" or el.type == "msg" or erase_set.has(el.id):
 			continue
 		if Geom.aabb(el).grow(tol).has_point(wp) and Geom.hit(el, wp, tol):
 			erase_set[el.id] = true

@@ -3,10 +3,10 @@ extends RefCounted
 ## par élément, en coordonnées locales), flèches liées (droites, courbes, coudées) et pointes.
 
 static var font: Font
-const BOXES := ["rectangle", "diamond", "ellipse", "text", "image", "frame", "zone"]
+const BOXES := ["rectangle", "diamond", "ellipse", "text", "image", "frame", "zone", "msg"]
 const SHAPES := ["rectangle", "diamond", "ellipse"]
 const LINEAR := ["arrow", "line", "freedraw"]
-const BINDABLE := ["rectangle", "diamond", "ellipse", "text", "image", "frame", "zone"]
+const BINDABLE := ["rectangle", "diamond", "ellipse", "text", "image", "frame", "zone", "msg"]
 const GAP := 6.0
 static var zoom := 1.0
 
@@ -165,7 +165,7 @@ static func hit(el: Dictionary, wp: Vector2, tol: float) -> bool:
 	var p := unrot(el, wp)
 	var o := Vector2(float(el.x), float(el.y))
 	match t:
-		"text", "image", "zone":
+		"text", "image", "zone", "msg":
 			return rect(el).grow(tol * 0.3).has_point(p)
 		"frame":
 			var r := rect(el)

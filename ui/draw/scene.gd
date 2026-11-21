@@ -6,7 +6,7 @@ const Geom := preload("res://ui/draw/geom.gd")
 const HIST_MAX := 120
 ## Une zone garde dans l'historique seulement sa géométrie : le contenu du chat n'est jamais annulé.
 const ZONE_HIST := ["id", "type", "x", "y", "w", "h", "angle", "locked", "group", "opacity"]
-const TYPES := ["rectangle", "diamond", "ellipse", "arrow", "line", "freedraw", "text", "image", "frame", "zone"]
+const TYPES := ["rectangle", "diamond", "ellipse", "arrow", "line", "freedraw", "text", "image", "frame", "zone", "msg"]
 const STYLE_KEYS := ["stroke", "bg", "fillStyle", "strokeWidth", "strokeStyle", "roughness", "opacity", "roundness"]
 const DEFAULT_STYLE := {"stroke": "e8ecf1", "bg": "transparent", "fillStyle": "hachure", "strokeWidth": 2.0, "strokeStyle": "plein",
 		"roughness": 1, "opacity": 100, "roundness": "round", "fontSize": 20, "arrowType": "sharp", "startHead": "none", "endHead": "arrow"}
@@ -15,6 +15,7 @@ signal changed
 signal reset
 signal zone_added(el)
 signal zone_removed(id)
+signal msg_removed(id)
 signal order_changed
 
 var els: Array = []
@@ -23,11 +24,16 @@ var sel := {}
 var rev := 0
 var cache := {}
 var grave := {}
+var search_q := ""  # recherche en cours (les nœuds msg qui ne correspondent pas sont estompés)
+var focus_key: Array = []  # cache de la mise en évidence du chemin (chat.gd)
+var focus_val := {}
 var style := DEFAULT_STYLE.duplicate()
 var on_clone: Callable = Callable()  # (ancien id, nouvel id, élément) : copie des fichiers liés (image d'une zone)
 var _struct := 0
 var _zones: Array = []
 var _arrows: Array = []
+var _msgs: Array = []
+var _kids := {}
 var _list_struct := -1
 var _hist: Array = []
 var _hi := -1
@@ -91,17 +97,42 @@ func arrows() -> Array:
 	return _arrows
 
 
+## Nœuds de chat (type « msg »), dans l'ordre des calques.
+func msgs() -> Array:
+	_lists()
+	return _msgs
+
+
+## Enfants (nœuds msg) d'un nœud de chat.
+func kids(id: String) -> Array:
+	_lists()
+	return _kids.get(id, [])
+
+
+func struct_id() -> int:
+	return _struct
+
+
 func _lists() -> void:
 	if _list_struct == _struct:
 		return
 	_list_struct = _struct
 	_zones = []
 	_arrows = []
+	_msgs = []
+	_kids = {}
 	for el in els:
 		if el.type == "zone":
 			_zones.append(el)
 		elif el.type == "arrow":
 			_arrows.append(el)
+		elif el.type == "msg":
+			_msgs.append(el)
+			var pid := str(el.get("parent", ""))
+			if pid != "":
+				if not _kids.has(pid):
+					_kids[pid] = []
+				_kids[pid].append(el)
 
 
 func _struct_changed() -> void:
@@ -299,7 +330,7 @@ func clone(src: Array, off := Vector2.ZERO) -> Array:
 	var out: Array = []
 	for el in src:
 		var c: Dictionary = (el as Dictionary).duplicate(true)
-		c.id = uid("z" if el.type == "zone" else "e")
+		c.id = uid("z" if el.type == "zone" else ("m" if el.type == "msg" else "e"))
 		map[el.id] = c.id
 		c.x = float(c.x) + off.x
 		c.y = float(c.y) + off.y
@@ -310,6 +341,10 @@ func clone(src: Array, off := Vector2.ZERO) -> Array:
 			c.group = gmap[g]
 		out.append(c)
 	for c in out:
+		if c.type == "msg":
+			c.parent = str(map.get(str(c.get("parent", "")), ""))  # copie d'une sous-branche : le parent copié suit, sinon nouvelle racine
+			c.done = true
+			c.model = ""
 		if c.type == "arrow" or c.type == "line":
 			for k in ["start", "end"]:
 				var t := str(c.get(k, ""))
@@ -423,6 +458,8 @@ func _restore(st: Dictionary) -> void:
 		if not keep.has(el.id) and el.type == "zone":
 			grave[el.id] = el
 			zone_removed.emit(el.id)
+		elif not keep.has(el.id) and el.type == "msg":
+			msg_removed.emit(el.id)
 	els = new_els
 	by_id = {}
 	for el in els:
@@ -451,6 +488,8 @@ func clear() -> void:
 	for el in els:
 		if el.type == "zone":
 			zone_removed.emit(el.id)
+		elif el.type == "msg":
+			msg_removed.emit(el.id)
 	els = []
 	by_id = {}
 	sel = {}
@@ -489,10 +528,25 @@ func _sanitize(el: Dictionary) -> void:
 	el["locked"] = bool(el.get("locked", false))
 	el["group"] = str(el.get("group", ""))
 	el["opacity"] = clampf(float(el.get("opacity", 100)), 0.0, 100.0)
-	if el.type != "zone":
+	if el.type != "zone" and el.type != "msg":
 		for k in STYLE_KEYS:
 			if not el.has(k):
 				el[k] = DEFAULT_STYLE[k]
+	if el.type == "msg":
+		el["role"] = "assistant" if str(el.get("role", "user")) == "assistant" else "user"
+		el["text"] = str(el.get("text", ""))
+		el["parent"] = str(el.get("parent", ""))
+		el["ai"] = int(el.get("ai", 0))
+		el["model"] = str(el.get("model", ""))
+		el["kind"] = "note"
+		el["w"] = maxf(float(el.w), 220.0)
+		el["h"] = maxf(float(el.h), 68.0)
+		el["angle"] = 0.0
+		if not bool(el.get("done", true)):  # réponse interrompue (fermeture pendant l'écriture)
+			el["done"] = true
+			if str(el.text).strip_edges() == "":
+				el["text"] = "(réponse interrompue)"
+		el["done"] = true
 	if el.type == "text":
 		el["text"] = str(el.get("text", ""))
 		el["fontSize"] = float(el.get("fontSize", 20))

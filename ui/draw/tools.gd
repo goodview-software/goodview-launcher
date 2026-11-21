@@ -11,7 +11,7 @@ func delete_sel() -> void:
 			ids.append(el.id)
 	if ids.is_empty():
 		return
-	sc.remove(ids)
+	sc.remove(Chat.with_branches(sc, ids))  # supprimer un nœud de chat emporte toute sa sous-branche (un seul Ctrl+Z la rend)
 	sc.commit()
 	S.host.links_changed()
 	S.sel_changed.emit()
@@ -249,6 +249,10 @@ func _context(cp: Vector2) -> void:
 	_menu.clear()
 	var has = not sc.sel.is_empty()
 	_menu.add_item("Coller", 1)
+	if has and sc.selected().size() == 1 and sc.selected()[0].type == "msg":
+		_menu.add_item("Répondre à ce message", 16)
+		_menu.add_item("Ranger la conversation", 17)
+		_menu.add_separator()
 	if has:
 		_menu.add_item("Copier", 2)
 		_menu.add_item("Couper", 3)
@@ -292,6 +296,8 @@ func _menu_pick(i: int) -> void:
 			S.host.links_changed()
 		14: select_all()
 		15: toggle_grid()
+		16: S.host.chat_reply(str(sc.selected()[0].id) if sc.selected().size() == 1 else "")
+		17: S.host.chat_tidy()
 
 
 func toggle_grid() -> void:
@@ -316,6 +322,9 @@ func key(e: InputEventKey) -> bool:
 		return false
 	var ctrl: bool = e.ctrl_pressed or e.meta_pressed
 	var k: int = e.keycode
+	if (k == KEY_ENTER or k == KEY_KP_ENTER) and (ctrl or e.shift_pressed) and mode == "":
+		S.host.open_assist("graph")  # Ctrl+Entrée / Maj+Entrée : assistant d'édition du graphe
+		return true
 	var pk: int = e.physical_keycode
 	if ctrl:
 		match k:
@@ -399,7 +408,7 @@ func key(e: InputEventKey) -> bool:
 			if mode == "poly":
 				_finish_draw()
 			else:
-				S.host.open_assist()  # Entrée = parler à l'assistant du graphe (F2 : éditer le texte)
+				S.host.open_assist("chat")  # Entrée = discuter en créant des nœuds (Ctrl/Maj+Entrée : éditer le graphe ; F2 : éditer le texte)
 		KEY_F2:
 			if true:
 				var els = sc.selected()

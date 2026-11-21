@@ -4,6 +4,7 @@ extends Control
 
 const T := preload("res://ui/theme.gd")
 const Geom := preload("res://ui/draw/geom.gd")
+const Joystick := preload("res://ui/draw/joystick.gd")
 const CELL := 44.0
 const COLORS := ["e8ecf1", "ff6b6b", "fbbf24", "4de1b4", "60a5fa", "a78bfa", "ff8fb1", "9ca3af"]
 const TOOLS := [["lock", "Verrou : garde l'outil actif (Q)", ""], ["|"], ["hand", "Main : déplacer la vue (H)", "H"], ["select", "Sélection (V ou 1)", "1"],
@@ -16,6 +17,7 @@ var toolbar: PanelContainer
 var tb_scroll: ScrollContainer
 var panel: PanelContainer
 var zoombar: PanelContainer
+var joy: Control
 var zoom_cell: Control
 var undo_cell: Control
 var redo_cell: Control
@@ -35,6 +37,9 @@ func setup(s) -> void:
 	_build_toolbar()
 	_build_panel()
 	_build_zoombar()
+	joy = Joystick.new()
+	add_child(joy)
+	joy.setup(S)
 	S.tool_changed.connect(_mark)
 	S.sel_changed.connect(_mark)
 	S.view_changed.connect(_zoom_label)
@@ -125,8 +130,13 @@ func layout() -> void:
 	var narrow := cw < 720.0
 	style_btn.visible = narrow
 	panel.position = Vector2(8, 70)
-	panel.size = Vector2(212, clampf(S.size.y - 70.0 - 72.0, 120.0, 900.0))
+	var joy_h := Joystick.SIZE + 8.0
+	panel.size = Vector2(212, clampf(S.size.y - 70.0 - 72.0 - joy_h, 120.0, 900.0))
 	zoombar.position = Vector2(8, S.size.y - zoombar.size.y - 8)
+	# joystick : au-dessus des contrôles de zoom, sans les recouvrir ; masqué si le canevas est trop bas
+	joy.visible = S.size.y >= 340.0
+	joy.position = Vector2(12, zoombar.position.y - Joystick.SIZE - 8.0)
+	S.block_rect = Rect2(joy.position, joy.size) if joy.visible else Rect2()
 
 
 func _sec(title: String, key: String) -> VBoxContainer:

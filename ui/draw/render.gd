@@ -4,6 +4,9 @@ extends RefCounted
 
 const Geom := preload("res://ui/draw/geom.gd")
 const T := preload("res://ui/theme.gd")
+const Chat := preload("res://ui/draw/chat.gd")
+const MIN_FS := 6.0  # taille minimale à l'écran d'un texte tracé (plus petit : on l'agrandit jusque-là)
+const HIDE_FS := 3.0  # en dessous, le texte est illisible : remplacé par un trait
 
 static var _dot_tex: ImageTexture
 static var _grid_tex: ImageTexture
@@ -70,6 +73,7 @@ static func draw_layer(ci: Control, S, front: bool) -> void:
 
 
 static func draw_el(ci: Control, S, el: Dictionary) -> void:
+	ci.draw_set_transform_matrix(Transform2D.IDENTITY)
 	var t := str(el.type)
 	var op := float(el.get("opacity", 100.0)) / 100.0
 	if S.tools.erase_set.has(el.id):
@@ -80,6 +84,9 @@ static func draw_el(ci: Control, S, el: Dictionary) -> void:
 		return
 	if t == "frame":
 		_frame(ci, S, el, op)
+		return
+	if t == "msg":
+		_msg(ci, S, el, op)
 		return
 	if t == "text":
 		if S.editing_id != el.id:
@@ -137,8 +144,9 @@ static func draw_el(ci: Control, S, el: Dictionary) -> void:
 
 static func _centered(ci: Control, S, el: Dictionary, txt: String, c: Vector2, op: float, rot := false) -> void:
 	var fs = float(el.get("fontSize", 16)) * S.zoom
-	if fs < 4.0:
+	if fs < HIDE_FS:
 		return
+	fs = maxf(fs, MIN_FS)
 	var sz := Geom.f().get_multiline_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, int(fs))
 	var colr := Geom.ncol(str(el.stroke))
 	colr.a *= op
@@ -155,11 +163,12 @@ static func _text(ci: Control, S, el: Dictionary, op: float) -> void:
 	col.a *= op
 	var c: Vector2 = S.w2c(Geom.center(el))
 	var sz = Vector2(float(el.w), float(el.h)) * S.zoom
-	if fs < 4.5:
+	if fs < HIDE_FS:
 		ci.draw_set_transform(c, float(el.angle), Vector2.ONE)
 		ci.draw_rect(Rect2(-sz * 0.5, Vector2(sz.x, maxf(sz.y * 0.35, 1.5))), Color(col, col.a * 0.6))
 		ci.draw_set_transform_matrix(Transform2D.IDENTITY)
 		return
+	fs = maxf(fs, MIN_FS)
 	ci.draw_set_transform(c, float(el.angle), Vector2.ONE)
 	ci.draw_multiline_string(Geom.f(), Vector2(-sz.x * 0.5, -sz.y * 0.5 + Geom.f().get_ascent(int(fs))), str(el.get("text", "")), HORIZONTAL_ALIGNMENT_LEFT, -1, int(fs), -1, col)
 	ci.draw_set_transform_matrix(Transform2D.IDENTITY)
@@ -190,6 +199,104 @@ static func _frame(ci: Control, S, el: Dictionary, op: float) -> void:
 	ci.draw_rect(bar, Color(col, 0.18 * op))
 	var fs := clampi(int(minf(bar.size.y * 0.6, 28.0)), 8, 28)
 	ci.draw_string(Geom.f(), bar.position + Vector2(8, bar.size.y * 0.5 + fs * 0.35), str(el.get("name", "")), HORIZONTAL_ALIGNMENT_LEFT, maxf(bar.size.x - 12.0, 8.0), fs, Color(T.TEXT, op))
+
+
+## Nœud de chat : carte (en-tête coloré par l'assistant, texte en Markdown léger), flèche fine depuis son parent ;
+## le chemin racine -> nœud sélectionné est en relief, le reste de l'arbre est estompé. Vue éloignée : texte résumé,
+## jamais sous MIN_FS pixels à l'écran.
+static func _msg(ci: Control, S, el: Dictionary, op: float) -> void:
+	var sc = S.scene
+	var z: float = S.zoom
+	var foc: Dictionary = Chat.focus(sc)
+	var in_path := false
+	if foc.on:
+		in_path = foc.anc.has(el.id)
+		if not foc.keep.has(el.id) and foc.tree.has(el.id):
+			op *= 0.5
+	var q: String = sc.search_q
+	if q != "" and not Chat.matches(el, q):
+		op *= 0.25
+	var st: Dictionary = S.host.msg_style(el)
+	var col: Color = st.color
+	var c: Dictionary = Chat.layout(sc, el)
+	var r := Rect2(S.w2c(Vector2(float(el.x), float(el.y))), Vector2(float(el.w), float(el.h)) * z)
+	var par: Dictionary = Chat.parent_of(sc, el)
+	if not par.is_empty():
+		_msg_edge(ci, S, par, el, foc.on and foc.anc.has(str(par.id)) and in_path, op, col)
+	ci.draw_rect(r, Color(T.CARD_HI if str(el.role) == "user" else T.CARD, op))
+	var hh := Chat.HEAD * z
+	ci.draw_rect(Rect2(r.position, Vector2(r.size.x, hh)), Color(col, 0.22 * op))
+	ci.draw_rect(r, Color(col, (1.0 if in_path else 0.7) * op), false, 3.0 if in_path else 2.0)
+	var f := Geom.f()
+	var hpx := int(12.0 * z)
+	if hpx >= 6:
+		var sq := 14.0 * z
+		var ar := Rect2(r.position + Vector2(8.0 * z, (Chat.HEAD * z - sq) * 0.5), Vector2(sq, sq))
+		ci.draw_rect(ar, Color(col, op))
+		var nm := str(st.name)
+		ci.draw_string(Chat.bold_font(), Vector2(ar.end.x + 6.0 * z, r.position.y + Chat.HEAD * z * 0.5 + hpx * 0.35), nm, HORIZONTAL_ALIGNMENT_LEFT, maxf(r.size.x - 60.0 * z, 10.0), hpx, Color(T.TEXT, op))
+		if not bool(el.get("done", true)):
+			ci.draw_string(f, Vector2(r.end.x - 70.0 * z, r.position.y + Chat.HEAD * z * 0.5 + hpx * 0.35), "écrit…", HORIZONTAL_ALIGNMENT_RIGHT, 62.0 * z, hpx, Color(T.WARN, op))
+	var tcol := Color(T.TEXT, op)
+	if Chat.FS * z >= Chat.MIN_PX:
+		for b in c.boxes:
+			var br: Rect2 = b.r
+			var sr := Rect2(r.position + br.position * z, br.size * z)
+			ci.draw_rect(sr, Color(0, 0, 0, 0.28 * op) if int(b.k) == 0 else Color(col, 0.7 * op))
+		for l in c.lines:
+			var sy: float = r.position.y + float(l.y) * z
+			if sy > ci.size.y or sy + 22.0 * z < 0.0:
+				continue
+			var px := int(float(l.fs) * z)
+			var fnt: Font = Chat.bold_font() if int(l.k) == 1 else f
+			var lc := tcol
+			match int(l.k):
+				1:
+					lc = Color(col.lightened(0.25), op)
+				3, 4:
+					lc = Color(T.DIM, op)
+			ci.draw_string(fnt, Vector2(r.position.x + float(l.x) * z, sy + fnt.get_ascent(px)), str(l.t), HORIZONTAL_ALIGNMENT_LEFT, -1, px, lc)
+	elif r.size.x >= 44.0 and r.size.y > hh + 14.0:
+		var txt: String = str(c.plain) if str(c.plain) != "" else "…"
+		var lines_n := clampi(int((r.size.y - hh - 6.0) / f.get_height(Chat.SUM_PX)), 1, 14)
+		ci.draw_multiline_string(f, r.position + Vector2(5.0, hh + 3.0 + f.get_ascent(Chat.SUM_PX)), txt, HORIZONTAL_ALIGNMENT_LEFT, r.size.x - 10.0, Chat.SUM_PX, lines_n, tcol)
+
+
+## Flèche fine parent -> enfant (courbe de Bézier, pointe en bout), calculée d'après les positions courantes.
+static func _msg_edge(ci: Control, S, par: Dictionary, el: Dictionary, hot: bool, op: float, col: Color) -> void:
+	var a := Geom.rect(par)
+	var b := Geom.rect(el)
+	var p0: Vector2
+	var p1: Vector2
+	var d: Vector2
+	if b.position.y >= a.end.y - 4.0:
+		p0 = Vector2(a.get_center().x, a.end.y)
+		p1 = Vector2(b.get_center().x, b.position.y)
+		d = Vector2(0, 1)
+	elif b.position.x >= a.end.x - 4.0:
+		p0 = Vector2(a.end.x, a.get_center().y)
+		p1 = Vector2(b.position.x, b.get_center().y)
+		d = Vector2(1, 0)
+	elif b.end.x <= a.position.x + 4.0:
+		p0 = Vector2(a.position.x, a.get_center().y)
+		p1 = Vector2(b.end.x, b.get_center().y)
+		d = Vector2(-1, 0)
+	else:
+		p0 = Vector2(a.get_center().x, a.end.y)
+		p1 = Vector2(b.get_center().x, b.position.y)
+		d = Vector2(0, 1)
+	var k := clampf(p0.distance_to(p1) * 0.45, 16.0, 140.0)
+	var c1 := p0 + d * k
+	var c2 := p1 - d * k
+	var pts := PackedVector2Array()
+	for i in 17:
+		pts.append(S.w2c(Geom.bez(p0, c1, c2, p1, i / 16.0)))
+	var lc := Color(T.OK if hot else T.DIM, (0.95 if hot else 0.6) * op)
+	ci.draw_polyline(pts, lc, 2.5 if hot else 1.5, true)
+	var tip: Vector2 = pts[16]
+	var dir: Vector2 = (tip - pts[14]).normalized()
+	var perp := Vector2(-dir.y, dir.x)
+	ci.draw_colored_polygon(PackedVector2Array([tip, tip - dir * 9.0 + perp * 4.5, tip - dir * 9.0 - perp * 4.5]), lc)
 
 
 static func _zone_proxy(ci: Control, S, el: Dictionary, op: float) -> void:

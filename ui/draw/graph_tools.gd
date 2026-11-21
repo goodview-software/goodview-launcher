@@ -276,7 +276,7 @@ static func _diagram(sc, args: Dictionary, center: Vector2, created: Array) -> S
 static func _list(sc) -> String:
 	var out: PackedStringArray = []
 	for e in sc.els:
-		if e.type == "freedraw":
+		if e.type == "freedraw" or e.type == "msg":
 			continue
 		var t := label_of(e).replace("\n", " ").left(60)
 		if e.type == "arrow":
@@ -385,6 +385,8 @@ static func _modify(sc, args: Dictionary) -> String:
 	var el := resolve(sc, str(args.get("id", "")))
 	if el.is_empty():
 		return "Erreur : élément introuvable (utilise lister_elements)."
+	if el.type == "msg":
+		return "Refusé : les nœuds de conversation ne se modifient pas par l'assistant du graphe."
 	var done: PackedStringArray = []
 	if args.has("texte"):
 		var t := str(args.texte)
@@ -431,12 +433,12 @@ static func _delete(sc, ids) -> String:
 	var del: Array = []
 	var refused := 0
 	if list.size() == 1 and str(list[0]).strip_edges().to_lower() in ["tout", "tous", "tout le schéma", "tout le tableau", "*", "all", "everything"]:
-		list = sc.els.filter(func(e): return e.type != "zone").map(func(e): return str(e.id))
+		list = sc.els.filter(func(e): return e.type != "zone" and e.type != "msg").map(func(e): return str(e.id))
 	for k in list:
 		var el := resolve(sc, str(k))
 		if el.is_empty():
 			continue
-		if el.type == "zone":
+		if el.type == "zone" or el.type == "msg":
 			refused += 1
 		elif el.id not in del:
 			del.append(el.id)
@@ -445,5 +447,5 @@ static func _delete(sc, ids) -> String:
 		return "Refusé : les zones de chat ne se suppriment pas par l'assistant (rien n'a été supprimé). Ne supprime que les formes, textes et flèches demandés."
 	if not del.is_empty():
 		sc.remove(del)
-	var left: int = sc.els.filter(func(e): return e.type != "zone").size()
+	var left: int = sc.els.filter(func(e): return e.type != "zone" and e.type != "msg").size()
 	return "%d élément(s) supprimé(s). Il reste %d élément(s) hors zones." % [del.size(), left]

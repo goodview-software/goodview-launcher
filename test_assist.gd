@@ -95,6 +95,7 @@ func _run() -> void:
 	var asst = Assist.new()
 	cv.add_child(asst)
 	asst.setup(board)
+	asst.set_mode("graph")
 	asst.open()
 
 	print("— 1. Créer un schéma")

@@ -10,7 +10,8 @@ const Tools := preload("res://ui/draw/tools.gd")
 const T := preload("res://ui/theme.gd")
 const ZMIN := 0.1
 const ZMAX := 4.0
-const LOD := 0.5
+## Sous ce zoom, les zones de chat (Controls) sont remplacées par des vignettes ; les textes dessinés restent lisibles (render.gd : MIN_FS).
+const LOD := 0.2
 
 signal view_changed
 signal tool_changed
@@ -33,6 +34,7 @@ var editing_id := ""
 var vis_back: Array = []
 var vis_front: Array = []
 var pinching := false
+var block_rect := Rect2()  # zone (joystick) dont les touchers ne comptent pas pour le pincement
 var _part_key := []
 var _touches := {}
 var _pinch_prev := {}
@@ -133,6 +135,10 @@ func partition() -> void:
 		var ab := Geom.aabb(el)
 		if el.type in Geom.LINEAR:
 			ab = ab.grow(30.0)
+		elif el.type == "msg" and str(el.get("parent", "")) != "":
+			var pe: Dictionary = scene.get_el(str(el.parent))
+			if not pe.is_empty():
+				ab = ab.merge(Geom.aabb(pe))  # la flèche vers le parent reste tracée même si le parent est hors écran
 		if not ab.intersects(view):
 			i += 1
 			continue
@@ -221,6 +227,33 @@ func fit_rect(r: Rect2, max_zoom := 1.0, smooth := true) -> void:
 		_apply()
 
 
+## Fait défiler la vue (sans changer le zoom) pour qu'un rectangle du monde soit visible ; centre dessus s'il est hors vue.
+func ensure_visible(r: Rect2, smooth := true) -> void:
+	if size.x < 10.0:
+		return
+	var v := Rect2(-t_pan / t_zoom, size / t_zoom).grow(-30.0 / t_zoom)
+	if v.encloses(r):
+		return
+	if v.intersects(r) and r.size.x < v.size.x and r.size.y < v.size.y:
+		var d := Vector2.ZERO
+		if r.position.x < v.position.x:
+			d.x = r.position.x - v.position.x
+		elif r.end.x > v.end.x:
+			d.x = r.end.x - v.end.x
+		if r.position.y < v.position.y:
+			d.y = r.position.y - v.position.y
+		elif r.end.y > v.end.y:
+			d.y = minf(r.end.y - v.end.y, r.position.y - v.position.y)
+		t_pan -= d * t_zoom
+	else:
+		t_pan = size * 0.5 - r.get_center() * t_zoom
+	if smooth:
+		set_process(true)
+	else:
+		pan = t_pan
+		_apply()
+
+
 func fit_all() -> void:
 	if scene.els.is_empty():
 		return
@@ -283,6 +316,8 @@ func _route(e: InputEvent) -> void:
 ## Pincement / deux doigts sur écran tactile.
 func touch_event(e: InputEvent) -> void:
 	var off := get_global_rect().position
+	if e is InputEventScreenTouch and e.pressed and block_rect.has_point(e.position - off):
+		return
 	if e is InputEventScreenTouch:
 		if e.pressed:
 			_touches[e.index] = e.position - off

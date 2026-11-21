@@ -1,7 +1,9 @@
 extends PanelContainer
-## Assistant du graphe : barre flottante en bas du tableau (Entrée pour l'ouvrir, Échap pour la fermer).
-## On lui parle (« fais un schéma de… », « mets le deuxième nœud en rouge »), il agit sur la scène avec les outils de
-## graph_tools.gd. Tout ce qu'il fait pendant une demande forme UNE seule étape d'historique : Ctrl+Z l'annule d'un coup.
+## Barre de saisie flottante en bas du tableau (Entrée pour l'ouvrir, Échap pour la fermer), deux modes :
+##  - « Discuter » (défaut) : le message devient un nœud (réponse au nœud sélectionné, sinon nouvelle conversation) et l'IA
+##    répond dans un nœud enfant (board.chat_say) ;
+##  - « Éditer le graphe » : on lui parle (« fais un schéma de… », « mets le deuxième nœud en rouge »), il agit sur la
+##    scène avec les outils de graph_tools.gd. Tout ce qu'il fait pendant une demande forme UNE seule étape d'historique.
 
 const U := preload("res://ui/universe.gd")
 const T := preload("res://ui/theme.gd")
@@ -9,6 +11,7 @@ const MD := preload("res://ui/markdown.gd")
 const Ollama := preload("res://core/ollama.gd")
 const Orchestra := preload("res://core/orchestra.gd")
 const GraphTools := preload("res://ui/draw/graph_tools.gd")
+const Chat := preload("res://ui/draw/chat.gd")
 const MAX_ROUNDS := 5
 const MAX_HISTORY := 8
 const WIDTH := 640.0
@@ -22,6 +25,15 @@ var req: Ollama.Req
 var trace: Array = []  # [{name, args, res}] des outils appelés (tests / diagnostic)
 var last_error := ""
 var history: Array = []  # [{role, content}] (texte seulement)
+var mode := "chat"  # "chat" : discuter en nœuds ; "graph" : éditer le graphe
+var fork := false  # prochaine réponse = nouvelle branche (« Branche ici »)
+var force_root := false  # le prochain message démarre une nouvelle conversation même si un nœud est sélectionné
+var who: OptionButton
+var b_chat: Button
+var b_graph: Button
+var target_b: Button
+var model_l: Label
+var _syncing := false
 
 
 func setup(b: Node) -> void:
@@ -45,10 +57,53 @@ func setup(b: Node) -> void:
 	reply.custom_minimum_size = Vector2(0, 0)
 	reply.visible = false
 	v.add_child(reply)
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 6)
+	v.add_child(top)
+	var grp := ButtonGroup.new()
+	b_chat = Button.new()
+	b_chat.text = "Discuter"
+	b_chat.tooltip_text = "Ton message devient un nœud ; l'IA répond dans un nœud enfant (Entrée)"
+	b_chat.toggle_mode = true
+	b_chat.button_group = grp
+	b_chat.pressed.connect(func(): set_mode("chat"))
+	top.add_child(b_chat)
+	b_graph = Button.new()
+	b_graph.text = "Éditer le graphe"
+	b_graph.tooltip_text = "L'IA crée et modifie des schémas (Ctrl+Entrée)"
+	b_graph.toggle_mode = true
+	b_graph.button_group = grp
+	b_graph.pressed.connect(func(): set_mode("graph"))
+	top.add_child(b_graph)
+	who = OptionButton.new()
+	who.tooltip_text = "Assistant qui répond"
+	for i in U.count():
+		who.add_item(str(U.get_u(i).name), i)
+	var act = board.ctx.get("active")
+	who.selected = clampi(int(act) if act != null else 0, 0, U.count() - 1)
+	who.item_selected.connect(func(_i: int): _sync_target())
+	top.add_child(who)
+	model_l = Label.new()
+	model_l.add_theme_font_size_override("font_size", 11)
+	model_l.add_theme_color_override("font_color", T.DIM)
+	model_l.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	model_l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(model_l)
+	target_b = Button.new()
+	target_b.flat = true
+	target_b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	target_b.add_theme_font_size_override("font_size", 12)
+	target_b.tooltip_text = "Cliquer : alterner entre répondre au nœud sélectionné et démarrer une nouvelle conversation"
+	target_b.pressed.connect(func():
+		force_root = not force_root
+		_sync_target())
+	target_b.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	target_b.custom_minimum_size = Vector2(0, 0)
+	v.add_child(target_b)
 	var row := HBoxContainer.new()
 	v.add_child(row)
 	input = LineEdit.new()
-	input.placeholder_text = "Assistant du graphe : « fais un schéma de… », « mets en rouge… »  (Entrée : envoyer · Échap : fermer)"
+	input.placeholder_text = "Écris un message…  (Entrée : envoyer · Échap : fermer)"
 	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	input.text_submitted.connect(ask)
 	input.gui_input.connect(func(e: InputEvent):
@@ -68,10 +123,62 @@ func setup(b: Node) -> void:
 	xb.pressed.connect(close)
 	row.add_child(xb)
 	board.canvas.resized.connect(reposition)
+	if board.canvas.has_signal("sel_changed"):
+		board.canvas.sel_changed.connect(_sync_target)
+	set_mode("chat")
 
 
-func open() -> void:
+## Bascule « Discuter » / « Éditer le graphe ».
+func set_mode(m: String) -> void:
+	mode = "graph" if m == "graph" else "chat"
+	_syncing = true
+	b_chat.button_pressed = mode == "chat"
+	b_graph.button_pressed = mode == "graph"
+	_syncing = false
+	who.visible = mode == "chat"
+	target_b.visible = mode == "chat"
+	reply.visible = mode == "graph" and reply.text != ""
+	input.placeholder_text = "Écris un message…  (Entrée : envoyer · Échap : fermer)" if mode == "chat" else "Éditer le graphe : « fais un schéma de… », « mets en rouge… »  (Entrée : envoyer · Échap : fermer)"
+	_sync_target()
+	reposition()
+
+
+## Nœud auquel le prochain message répond : le nœud de chat sélectionné, sinon "" (nouvelle conversation).
+func target_id() -> String:
+	if force_root:
+		return ""
+	var sel: Array = board.scene.selected()
+	if sel.size() == 1 and Chat.is_msg(sel[0]):
+		return str(sel[0].id)
+	return ""
+
+
+func _sync_target() -> void:
+	if target_b == null:
+		return
+	if mode == "chat":
+		var tid := target_id()
+		var el: Dictionary = board.scene.get_el(tid) if tid != "" else {}
+		if el.is_empty():
+			target_b.text = "✚ Nouvelle conversation (sélectionne un nœud pour lui répondre)" if not force_root else "✚ Nouvelle conversation (cliquer : répondre au nœud sélectionné)"
+		else:
+			var t := Chat.title_of(el)
+			target_b.text = "%s « %s » (cliquer : nouvelle conversation)" % ["⑂ Nouvelle branche depuis" if fork else "↳ Réponse à", t if t != "" else "…"]
+	var m := ""
+	if mode == "chat":
+		m = str(board.ctx.model_for(who.selected))
+	else:
+		m = _model()
+	model_l.text = "modèle : " + (m if m != "" else "aucun")
+	reposition()
+
+
+func open(m := "") -> void:
+	if m != "":
+		set_mode(m)
+	fork = false
 	visible = true
+	_sync_target()
 	reposition()
 	input.grab_focus()
 
@@ -116,6 +223,17 @@ func _say(bb: String) -> void:
 
 func ask(text: String) -> void:
 	text = text.strip_edges()
+	if mode == "chat":
+		if text == "":
+			return
+		input.text = ""
+		var parent := target_id()
+		var fk := fork
+		fork = false
+		force_root = false
+		board.chat_say(text, parent, who.selected, fk)  # sans attendre : la barre reste libre pour la suite
+		_sync_target()
+		return
 	if busy or text == "":
 		return
 	var sc = board.scene
