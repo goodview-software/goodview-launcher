@@ -1,4 +1,7 @@
 extends "res://pages/page.gd"
+
+const QR := preload("res://qr.gd")
+const APK_URL := "https://github.com/goodview-software/goodview-launcher/releases/latest/download/GoodviewLauncher.apk"
 ## Paramètres : vérification automatique, dossier d'installation, cache.
 
 var _confirm_cache := false
@@ -122,6 +125,38 @@ func build() -> void:
 	r3.add_child(clr)
 
 	# --- À propos
+	# --- Launcher sur téléphone : QR code de l'APK
+	var cq := W.card(body)
+	var qh := HBoxContainer.new()
+	qh.add_theme_constant_override("separation", 16)
+	cq.add_child(qh)
+	var qt: Texture2D = QR.texture(APK_URL, 6)
+	if qt != null:
+		var fr := PanelContainer.new()
+		fr.add_theme_stylebox_override("panel", T.style(Color.WHITE, 16, 8))
+		fr.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		qh.add_child(fr)
+		var tr := TextureRect.new()
+		tr.texture = qt
+		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		tr.custom_minimum_size = Vector2(160, 160)
+		tr.tooltip_text = "Scanne avec ton téléphone"
+		fr.add_child(tr)
+	var qv := VBoxContainer.new()
+	qv.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	qv.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	qv.add_theme_constant_override("separation", 12)
+	qh.add_child(qv)
+	W.label("Launcher sur téléphone", 18, T.TEXT, qv)
+	W.label("Scanne le code pour installer l'APK Android.", 14, T.DIM, qv)
+	var phb := W.IconBtn.new("phone", 56)
+	phb.tooltip_text = "Ouvrir le lien de l'APK"
+	phb.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	phb.pressed.connect(func(): OS.shell_open(APK_URL))
+	qv.add_child(phb)
+
 	var c4 := W.card(body, 8)
 	var row := W.Row.new()
 	row.pressed.connect(func(): router.push("about"))

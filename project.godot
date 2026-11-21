@@ -12,4 +12,6 @@ window/size/viewport_width=1100
 window/size/viewport_height=720
 
 [rendering]
+
+textures/vram_compression/import_etc2_astc=true
 renderer/rendering_method="gl_compatibility"

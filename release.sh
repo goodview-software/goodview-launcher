@@ -13,11 +13,13 @@ OUT=build/release; rm -rf "$OUT"; mkdir -p "$OUT" build/linux
 sed -i "s/^const VERSION := .*/const VERSION := \"$V\"/" version.gd
 $GODOT --headless --path . --export-pack "Linux" "$OUT/goodview-launcher-$V.pck"
 $GODOT --headless --path . --export-release "Linux" build/linux/GoodviewLauncher.x86_64
+$GODOT --headless --path . --export-debug "Android" "$OUT/GoodviewLauncher.apk" || echo "APK non généré"
 cp icon.svg build/linux/
 rm -rf build/GoodviewLauncher && cp -r build/linux build/GoodviewLauncher
 (cd build && zip -qr "release/GoodviewLauncher-$V-linux.zip" GoodviewLauncher) && rm -rf build/GoodviewLauncher
 cp "$OUT/GoodviewLauncher-$V-linux.zip" "$OUT/GoodviewLauncher-linux.zip"
 
+rm -f "$OUT"/*.idsig
 SHA="$(sha256sum "$OUT/goodview-launcher-$V.pck" | cut -d' ' -f1)"
 cat > "$OUT/version.json" <<J
 {"version": "$V", "godot": "$ENGINE", "sha256": "$SHA",
