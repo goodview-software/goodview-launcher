@@ -1,19 +1,37 @@
 extends RefCounted
-## Composants visuels réutilisables : mêmes états de survol / pression partout.
+## Couche de compatibilité : les pages du launcher gardent leur API (W.label, W.Btn, W.IconBtn...) mais tout est rendu par le kit
+## (tokens, Inter, Lucide, composants animés). Les nouveaux écrans utilisent directement kit/k.gd.
 
 const T := preload("res://ui/theme.gd")
 const Ico := preload("res://ui/icons.gd")
 const U := preload("res://ui/universe.gd")
+const K := preload("res://kit/k.gd")
+const Tk := preload("res://kit/tokens.gd")
+const KS := preload("res://kit/ui/ks.gd")
+const KIcons := preload("res://kit/icon.gd")
+
+## Tailles héritées -> tokens de texte.
+static func snap(px: int) -> int:
+	if px <= 12:
+		return Tk.FS_XS
+	if px <= 14:
+		return Tk.FS_SM
+	if px <= 16:
+		return Tk.FS_BASE
+	if px <= 18:
+		return Tk.FS_LG
+	if px <= 20:
+		return Tk.FS_XL
+	if px <= 26:
+		return Tk.FS_2XL
+	return Tk.FS_3XL
 
 
 # ------------------------------------------------------------------ Helpers de construction
 
 static func label(text: String, size: int, color: Color, parent: Control = null) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_font_size_override("font_size", size)
-	l.add_theme_color_override("font_color", color)
-	l.autowrap_mode = TextServer.AUTOWRAP_OFF if parent is HBoxContainer else TextServer.AUTOWRAP_WORD_SMART
+	var s := snap(size)
+	var l := KS.label(null, text, s, color, 600 if s >= Tk.FS_XL else 400, not (parent is HBoxContainer))
 	if parent != null:
 		parent.add_child(l)
 	return l
@@ -22,63 +40,45 @@ static func label(text: String, size: int, color: Color, parent: Control = null)
 ## Pastille de texte colorée.
 static func pill(parent: Control, text: String, color: Color) -> Label:
 	var p := PanelContainer.new()
-	var sb := T.style(Color(color, 0.14), 14, 4)
-	sb.content_margin_left = 12
-	sb.content_margin_right = 12
-	p.add_theme_stylebox_override("panel", sb)
+	p.add_theme_stylebox_override("panel", KS.box(Color(color, 0.14), Tk.R_FULL, Tk.S3, Tk.S1))
 	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	parent.add_child(p)
-	var l := label(text, 13, color, p)
-	l.autowrap_mode = TextServer.AUTOWRAP_OFF
-	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var l := KS.label(p, text, Tk.FS_XS, Tk.ensure_contrast(color, Tk.over(Color(color, 0.14), Tk.surface1), 4.5), 600, false)
 	return l
 
 
-## Carte (fond #171b22, sans bordure) ; renvoie le conteneur vertical intérieur.
+## Carte ; renvoie le conteneur vertical intérieur.
 static func card(parent: Control, pad := 16) -> VBoxContainer:
-	var p := PanelContainer.new()
-	p.add_theme_stylebox_override("panel", T.style(T.CARD, 24, pad))
+	var p: PanelContainer = K.Card.new()
+	p.pad = Tk.S4 if pad >= 16 else Tk.S3
 	parent.add_child(p)
-	var v := VBoxContainer.new()
-	v.add_theme_constant_override("separation", 12)
-	p.add_child(v)
+	var v := KS.vbox(p, Tk.S3)
 	return v
 
 
 static func spacer(parent: Control) -> Control:
-	var s := Control.new()
-	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	s.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	parent.add_child(s)
-	return s
+	return KS.spacer(parent)
 
 
 ## Ligne de réglage : titre + sous-titre à gauche ; renvoie la ligne pour y ajouter le contrôle à droite.
 static func setting_row(parent: Control, title: String, sub := "") -> HBoxContainer:
-	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 14)
-	parent.add_child(h)
-	var v := VBoxContainer.new()
+	var h := KS.hbox(parent, Tk.S3)
+	var v := KS.vbox(h, Tk.S1)
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	v.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	v.add_theme_constant_override("separation", 2)
-	h.add_child(v)
-	label(title, 17, T.TEXT, v)
+	KS.label(v, title, Tk.FS_BASE, null, 500, true)
 	if sub != "":
-		label(sub, 13, T.DIM, v)
+		KS.label(v, sub, Tk.FS_SM, Tk.text_muted, 400, true)
 	return h
 
 
 static func hsep(parent: Control) -> void:
-	var sep := ColorRect.new()
-	sep.color = Color(1, 1, 1, 0.06)
-	sep.custom_minimum_size = Vector2(0, 1)
-	parent.add_child(sep)
+	parent.add_child(K.Divider.new())
 
 
-# ------------------------------------------------------------------ Base interactive
+# ------------------------------------------------------------------ Base interactive (mascottes, avatars)
 
-## Zone cliquable : survol, pression et relâchement identiques pour tous les widgets.
 class Tap extends Control:
 	signal pressed
 	var hot := false
@@ -115,14 +115,22 @@ class Tap extends Control:
 		accept_event()
 
 
-# ------------------------------------------------------------------ Boutons
 
-class IconBtn extends Tap:
+
+# ------------------------------------------------------------------ Boutons (rendus par le kit)
+
+const ICON_MAP := {"back": "chevron-left", "refresh": "refresh-cw", "close": "x", "copy": "copy", "edit": "pencil", "gear": "settings",
+		"github": "github", "link": "external-link", "paperclip": "paperclip", "phone": "smartphone", "desktop": "monitor", "plus": "plus",
+		"star": "star", "star_on": "star", "trash": "trash-2", "download": "download", "send": "arrow-up", "check": "check",
+		"search": "search", "info": "info", "alert": "info", "menu": "menu", "chat": "message-circle", "user": "user", "apps": "layout-grid",
+		"play": "play", "folder": "folder-open", "image": "image", "export": "upload", "wifi_off": "wifi-off", "pin": "pin", "chevron": "chevron-right"}
+
+class IconBtn extends K.Press:
 	var kind := "refresh":
 		set(v):
 			kind = v
 			queue_redraw()
-	var col := Color("e8ecf1"):
+	var col: Variant = null:
 		set(v):
 			col = v
 			queue_redraw()
@@ -137,154 +145,87 @@ class IconBtn extends Tap:
 			badge = v
 			queue_redraw()
 	var angle := 0.0
+	var px := 44
+	var enabled := true:
+		set(v):
+			enabled = v
+			disabled = not v
 
-	func _init(k := "refresh", px := 44) -> void:
+	func _init(k := "refresh", p := 44) -> void:
 		super()
 		kind = k
-		custom_minimum_size = Vector2(px, px)
+		px = p
+		custom_minimum_size = Vector2(maxi(p, Tk.TOUCH), maxi(p, Tk.TOUCH))
 		set_process(false)
 
 	func _process(d: float) -> void:
-		angle += d * 6.0
+		angle = fposmod(angle + d * 6.0, TAU)
 		queue_redraw()
 
+	func k_colors() -> Array:
+		return [[_fg(), Tk.surface1]]
+
+	func _fg() -> Color:
+		if col != null:
+			return col
+		if kind == "star_on":
+			return Tk.warn
+		return Tk.text_muted.lerp(Tk.text, hover)
+
 	func _draw() -> void:
-		var c := size / 2.0
-		var r := minf(size.x, size.y) / 2.0
-		draw_circle(c, r, Color(1, 1, 1, 0.16 if down else (0.11 if hot else 0.05)))
-		draw_set_transform(c, angle if spin else 0.0)
-		var k := minf(size.x, size.y) / 46.0 * 0.78 * (0.92 if down else 1.0)
-		Ico.draw_kind(self, kind, Vector2.ZERO, k, col)
-		draw_set_transform(Vector2.ZERO)
+		var c := size * 0.5
+		var d := minf(float(px), minf(size.x, size.y))
+		draw_style_box(KS.box(Color(1, 1, 1, 0.07 * hover + 0.06 * down), Tk.R_FULL), Rect2(c - Vector2(d, d) * 0.5, Vector2(d, d)))
+		draw_ring(Rect2(c - Vector2(d, d) * 0.5, Vector2(d, d)), d * 0.5)
+		var a := 0.42 if disabled else 1.0
+		var fg := Color(_fg(), a)
+		var name: String = ICON_MAP.get(kind, "")
+		if name != "" and KIcons.has(name):
+			var isz := 24 if d >= 40 else 20
+			if spin:
+				draw_set_transform(c, angle, Vector2.ONE)
+				c = Vector2.ZERO
+			var t := KIcons.texture(name, isz)
+			if t != null:
+				draw_texture_rect(t, Rect2(c - Vector2(isz, isz) * 0.5, Vector2(isz, isz)), false, fg)
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		else:
+			Ico.draw_kind(self, kind, c, d / 44.0 * 0.62, fg)
 		if badge:
-			draw_circle(c + Vector2(r * 0.68, -r * 0.68), r * 0.26, T.BG)
-			draw_circle(c + Vector2(r * 0.68, -r * 0.68), r * 0.18, T.WARN)
+			draw_circle(size * 0.5 + Vector2(d, -d) * 0.28, 5.0, Tk.surface0)
+			draw_circle(size * 0.5 + Vector2(d, -d) * 0.28, 3.5, Tk.warn)
 
 
-## Bouton texte : "primary" (accent), "soft" (neutre), "danger", "ghost" (sans fond).
-class Btn extends Button:
-	var kind := "soft"
-
+## Bouton texte : "primary", "soft" (neutre), "danger", "ghost".
+class Btn extends K.Btn:
 	func _init(txt := "", k := "soft") -> void:
+		super()
 		text = txt
-		kind = k
-		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		focus_mode = Control.FOCUS_NONE
-		custom_minimum_size = Vector2(0, 50)
-		add_theme_font_size_override("font_size", 17)
-		_apply()
-
-	func _apply() -> void:
-		var base := T.FIELD
-		var hi := T.FIELD_HI
-		var fg := T.TEXT
-		match kind:
-			"primary":
-				base = T.OK
-				hi = T.OK.lightened(0.15)
-				fg = T.ON_ACCENT
-			"danger":
-				base = Color(T.BAD, 0.18)
-				hi = Color(T.BAD, 0.3)
-				fg = T.BAD
-			"ghost":
-				base = Color(1, 1, 1, 0.0)
-				hi = Color(1, 1, 1, 0.07)
-				fg = T.DIM
-		var rad := int(custom_minimum_size.y / 2.0)
-		for st in ["normal", "hover", "pressed", "focus", "disabled"]:
-			var col := hi if st == "hover" else (base.darkened(0.15) if st == "pressed" else base)
-			if st == "disabled":
-				col = T.FIELD if kind == "primary" else Color(base, base.a * 0.5)
-			var sb := T.style(col, rad, 12)
-			sb.content_margin_left = 22
-			sb.content_margin_right = 22
-			add_theme_stylebox_override(st, sb)
-		for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
-			add_theme_color_override(c, fg)
-		add_theme_color_override("font_disabled_color", T.DIM)
+		set_kind(k)
+		size_name = "lg"
 
 	func set_kind(k: String) -> void:
-		kind = k
-		_apply()
+		kind = {"soft": "secondary"}.get(k, k)
 
 
-class Toggle extends Tap:
-	signal toggled(on: bool)
-	var on := false
-	var t := 0.0
-
+class Toggle extends K.Toggle:
 	func _init() -> void:
 		super()
-		custom_minimum_size = Vector2(58, 34)
-		pressed.connect(func():
-			on = not on
-			toggled.emit(on))
-
-	func set_on(v: bool) -> void:  # sans émettre de signal
-		on = v
-		t = 1.0 if v else 0.0
-		queue_redraw()
-
-	func _process(d: float) -> void:
-		var nt := move_toward(t, 1.0 if on else 0.0, d * 9.0)
-		if nt != t or hot:
-			t = nt
-			queue_redraw()
-
-	func _draw() -> void:
-		var h := size.y
-		var bg := T.FIELD_HI.lerp(T.OK, t) if hot else T.FIELD.lerp(T.OK, t)
-		draw_rect(Rect2(h / 2, 0, size.x - h, h), bg, true)
-		draw_circle(Vector2(h / 2, h / 2), h / 2, bg)
-		draw_circle(Vector2(size.x - h / 2, h / 2), h / 2, bg)
-		var kx := lerpf(h / 2, size.x - h / 2, t)
-		draw_circle(Vector2(kx, h / 2 + 1.0), h / 2 - 3, Color(0, 0, 0, 0.25))
-		draw_circle(Vector2(kx, h / 2), h / 2 - (5 if down else 4), Color.WHITE)
 
 
 ## Sélecteur segmenté : options [[id, libellé], ...].
-class Seg extends Control:
-	signal changed(id: String)
-	var opts: Array = []
-	var cur := ""
-
+class Seg extends K.Segmented:
+	var cur := "":
+		get:
+			return value
 	func _init(o: Array, c: String) -> void:
-		opts = o
-		cur = c
-		custom_minimum_size = Vector2(opts.size() * 96, 38)
-		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-
+		super()
+		options = o
+		value = c
+		_pos = float(_idx())
 	func select(id: String) -> void:
-		cur = id
-		queue_redraw()
+		set_value(id, false)
 
-	func _gui_input(e: InputEvent) -> void:
-		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
-			var i := clampi(int(e.position.x / (size.x / opts.size())), 0, opts.size() - 1)
-			if opts[i][0] != cur:
-				cur = opts[i][0]
-				changed.emit(cur)
-				queue_redraw()
-			accept_event()
-
-	func _draw() -> void:
-		var h := size.y
-		Ico.box(self, Rect2(Vector2.ZERO, size), h / 2.0, T.FIELD)
-		var w := size.x / opts.size()
-		var font := get_theme_default_font()
-		for i in opts.size():
-			var on: bool = opts[i][0] == cur
-			if on:
-				Ico.box(self, Rect2(i * w + 3, 3, w - 6, h - 6), (h - 6) / 2.0, T.FIELD_HI)
-			var txt: String = opts[i][1]
-			var fs := 14
-			var tw := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-			draw_string(font, Vector2(i * w + (w - tw) / 2.0, h / 2.0 + fs * 0.36), txt,
-					HORIZONTAL_ALIGNMENT_LEFT, -1, fs, T.TEXT if on else T.DIM)
-
-
-# ------------------------------------------------------------------ Mascotte, icônes d'app, avatars
 
 class Orb extends Control:
 	const SHEET := preload("res://mascot/goody.png")
@@ -424,8 +365,6 @@ class Avatar extends Tap:
 			draw_circle(c + Vector2(r * 0.72, -r * 0.72), r * 0.27, T.BAD)
 
 
-# ------------------------------------------------------------------ Ligne de liste
-
 ## Ligne cliquable (accueil) : fond au survol, plus marqué à la pression.
 class Row extends PanelContainer:
 	signal pressed
@@ -456,6 +395,7 @@ class Row extends PanelContainer:
 			accept_event()
 
 
+
 # ------------------------------------------------------------------ États (chargement / vide / hors-ligne / erreur)
 
 ## Mascotte + titre + message + bouton d'action optionnel.
@@ -463,27 +403,18 @@ class StateView extends VBoxContainer:
 	signal action
 	var orb: Orb
 
-	func _lbl(text: String, size_: int, color: Color, parent: Control) -> Label:
-		var l := Label.new()
-		l.text = text
-		l.add_theme_font_size_override("font_size", size_)
-		l.add_theme_color_override("font_color", color)
-		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		parent.add_child(l)
-		return l
-
 	func _init(anim: String, variant: int, title: String, msg := "", btn := "", orb_h := 150) -> void:
-		add_theme_constant_override("separation", 10)
+		add_theme_constant_override("separation", Tk.S3)
 		alignment = BoxContainer.ALIGNMENT_CENTER
 		orb = Orb.new()
 		orb.anim = anim
 		orb.variant = variant
 		orb.custom_minimum_size = Vector2(0, orb_h)
 		add_child(orb)
-		var t := _lbl(title, 21, T.TEXT, self)
+		var t := KS.label(self, title, Tk.FS_XL, null, 600, true)
 		t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		if msg != "":
-			var m := _lbl(msg, 14, T.DIM, self)
+			var m := KS.label(self, msg, Tk.FS_SM, Tk.text_muted, 400, true)
 			m.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		if btn != "":
 			var b := Btn.new(btn, "soft")
@@ -493,100 +424,29 @@ class StateView extends VBoxContainer:
 
 
 ## Lignes fantômes qui pulsent pendant le chargement.
-class Skeleton extends Control:
-	var t := 0.0
-	var rows := 4
-
+class Skeleton extends VBoxContainer:
 	func _init(n := 4) -> void:
-		rows = n
-		custom_minimum_size = Vector2(0, n * 80 + 16)
-		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_theme_constant_override("separation", Tk.S3)
+		for i in n:
+			var c: PanelContainer = K.Card.new()
+			add_child(c)
+			var h := KS.hbox(c, Tk.S3)
+			var ic: Control = K.Skeleton.new()
+			ic.radius = Tk.R_MD
+			ic.custom_minimum_size = Vector2(48, 48)
+			h.add_child(ic)
+			var v := KS.vbox(h, Tk.S2)
+			v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			v.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			var a: Control = K.Skeleton.new()
+			a.custom_minimum_size = Vector2(0, 14)
+			v.add_child(a)
+			var b: Control = K.Skeleton.new()
+			b.custom_minimum_size = Vector2(0, 10)
+			v.add_child(b)
 
-	func _process(d: float) -> void:
-		t += d * 3.0
-		queue_redraw()
 
-	func _draw() -> void:
-		Ico.box(self, Rect2(Vector2.ZERO, size), 24, T.CARD)
-		for i in rows:
-			var a := 0.05 + 0.03 * sin(t - i * 0.7)
-			var y := 8.0 + i * 80.0 + 12.0
-			Ico.box(self, Rect2(20, y, 56, 56), 14, Color(1, 1, 1, a))
-			Ico.box(self, Rect2(92, y + 8, 150, 14), 7, Color(1, 1, 1, a))
-			Ico.box(self, Rect2(92, y + 32, 230, 11), 5, Color(1, 1, 1, a * 0.7))
-
-
-## Notification discrète en bas de l'écran (remplace les boîtes de dialogue).
-class Toast extends PanelContainer:
-	var lbl: Label
-	var act: Button
-	var tw: Tween
-	var _cb := Callable()
-
-	func _lbl(text: String, size_: int, color: Color, parent: Control) -> Label:
-		var l := Label.new()
-		l.text = text
-		l.add_theme_font_size_override("font_size", size_)
-		l.add_theme_color_override("font_color", color)
-		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		parent.add_child(l)
-		return l
-
-	func _init() -> void:
-		mouse_filter = Control.MOUSE_FILTER_IGNORE
-		modulate.a = 0.0
-		var h := HBoxContainer.new()
-		h.add_theme_constant_override("separation", 14)
-		h.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		add_child(h)
-		lbl = _lbl("", 15, T.TEXT, h)
-		lbl.autowrap_mode = TextServer.AUTOWRAP_OFF
-		lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		act = Button.new()
-		act.flat = true
-		act.focus_mode = Control.FOCUS_NONE
-		act.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		act.add_theme_font_size_override("font_size", 15)
-		act.visible = false
-		act.pressed.connect(func():
-			if _cb.is_valid():
-				_cb.call()
-			_cb = Callable()
-			if tw != null:
-				tw.kill()
-			tw = create_tween()
-			tw.tween_property(self, "modulate:a", 0.0, 0.2))
-		h.add_child(act)
-		set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-		grow_horizontal = Control.GROW_DIRECTION_BOTH
-		grow_vertical = Control.GROW_DIRECTION_BEGIN
-		offset_bottom = -94  # au-dessus de la barre de navigation
-
-	## action : libellé d'un bouton (ex. « Annuler ») qui appelle `cb` ; la notification reste 5 s.
+## Notification discrète : pile de toasts du kit (garde l'ancienne API show_msg).
+class Toast extends K.Toast:
 	func show_msg(text: String, kind := "info", action := "", cb := Callable()) -> void:
-		var col := T.TEXT
-		match kind:
-			"ok":
-				col = T.OK
-			"error":
-				col = T.BAD
-		var sb := T.style(Color("262d38"), 22, 12)
-		sb.content_margin_left = 20
-		sb.content_margin_right = 20
-		add_theme_stylebox_override("panel", sb)
-		lbl.text = text
-		lbl.add_theme_color_override("font_color", col)
-		act.visible = action != ""
-		act.text = action
-		act.add_theme_color_override("font_color", T.OK)
-		act.add_theme_color_override("font_hover_color", T.OK.lightened(0.3))
-		_cb = cb
-		mouse_filter = Control.MOUSE_FILTER_STOP if action != "" else Control.MOUSE_FILTER_IGNORE
-		if tw != null:
-			tw.kill()
-		tw = create_tween()
-		tw.tween_property(self, "modulate:a", 1.0, 0.18)
-		tw.tween_interval(5.0 if action != "" else 2.8)
-		tw.tween_property(self, "modulate:a", 0.0, 0.3)
-		tw.tween_callback(func(): mouse_filter = Control.MOUSE_FILTER_IGNORE)
+		push(text, {"ok": "success", "error": "danger"}.get(kind, "info"), action, cb, 5.0 if action != "" else 3.0)

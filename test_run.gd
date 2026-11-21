@@ -333,7 +333,8 @@ func label_check(page: Control, tag: String) -> void:
 		if n is Label and (n as Label).is_visible_in_tree() and (n as Label).text.length() >= 3:
 			var l: Label = n
 			var fs := l.get_theme_font_size("font_size")
-			if l.size.x < fs * 2.0 and l.size.x > 0.0 or (l.autowrap_mode != TextServer.AUTOWRAP_OFF and l.size.x < fs * 2.0 and l.size.x > 0.0):
+			var need := minf(fs * 2.0, l.get_theme_font("font").get_string_size(l.text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x * 0.98)
+			if l.size.x < need and l.size.x > 0.0:
 				bad.append("«%s» %.0fpx" % [l.text.left(20), l.size.x])
 	check(bad.is_empty(), "libellés coupés (%s) : %s" % [tag, ", ".join(bad)])
 

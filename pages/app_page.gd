@@ -430,7 +430,7 @@ func _fill_history(a: Dictionary, c: Control, box: VBoxContainer, list: Array) -
 			W.pill(rv, "dernière", T.DIM)
 
 
-func _main_button(a: Dictionary, status: String) -> Button:
+func _main_button(a: Dictionary, status: String) -> Control:
 	var b := W.Btn.new("", "primary")
 	b.custom_minimum_size = Vector2(0, 52)
 	b.add_theme_font_size_override("font_size", 17)

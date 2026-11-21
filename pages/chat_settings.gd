@@ -39,7 +39,6 @@ func build() -> void:
 	_pull_btn = W.Btn.new("", "primary")
 	_pull_btn.custom_minimum_size = Vector2(54, 46)
 	_pull_btn.pressed.connect(func(): start_pull(_pull_edit.text))
-	_pull_btn.icon = null
 	hr.add_child(_pull_btn)
 	var dl := W.IconBtn.new("download", 46)
 	dl.tooltip_text = "Télécharger"

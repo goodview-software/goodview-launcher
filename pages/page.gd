@@ -1,4 +1,4 @@
-extends Control
+extends "res://kit/layout/k_page.gd"
 ## Base commune des pages : en-tête fixe (retour, titre, actions) + contenu défilant centré.
 ## Les pages surchargent build() ; rebuild() reconstruit le contenu après un changement de données.
 
@@ -11,79 +11,22 @@ var ctx: Ctx
 var router: Control
 var args := {}
 var page_id := ""
-var max_w := T.MAX_WIDTH
-var _outer: VBoxContainer
+var max_w := 960.0
 var page_title := ""  # titre de fenêtre (vide = accueil)
-var has_back := true
-var head: HBoxContainer
-var head_title: Label
-var head_right: HBoxContainer
-var body: VBoxContainer
-var scroll: ScrollContainer
-var _center: CenterContainer
 
 
 func _ready() -> void:
-	var outer := VBoxContainer.new()
-	_outer = outer
-	outer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	outer.add_theme_constant_override("separation", 10)
-	add_child(outer)
-	var hm := MarginContainer.new()
-	hm.add_theme_constant_override("margin_left", 18)
-	hm.add_theme_constant_override("margin_right", 18)
-	hm.add_theme_constant_override("margin_top", 16)
-	outer.add_child(hm)
-	var hc := CenterContainer.new()
-	hm.add_child(hc)
-	head = HBoxContainer.new()
-	head.add_theme_constant_override("separation", 10)
-	hc.add_child(head)
-	if has_back:
-		var b := W.IconBtn.new("back", 44)
-		b.tooltip_text = "Retour"
-		b.pressed.connect(func(): router.back())
-		head.add_child(b)
-	head_title = W.label("", 20, T.TEXT, head)
-	head_title.autowrap_mode = TextServer.AUTOWRAP_OFF
-	head_title.clip_text = true
-	head_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head_title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	head_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if has_back else HORIZONTAL_ALIGNMENT_LEFT
-	head_right = HBoxContainer.new()
-	head_right.add_theme_constant_override("separation", 10)
-	head.add_child(head_right)
-
-	scroll = ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	outer.add_child(scroll)
-	var sm := MarginContainer.new()
-	sm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sm.add_theme_constant_override("margin_left", 18)
-	sm.add_theme_constant_override("margin_right", 18)
-	sm.add_theme_constant_override("margin_top", 6)
-	sm.add_theme_constant_override("margin_bottom", 28)
-	scroll.add_child(sm)
-	_center = CenterContainer.new()
-	_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sm.add_child(_center)
-	body = VBoxContainer.new()
-	body.add_theme_constant_override("separation", 16)
-	_center.add_child(body)
-	get_viewport().size_changed.connect(_fit_width)
-	resized.connect(_fit_width)
+	build_shell()
+	back_pressed.connect(func(): router.back())
 	_fit_width()
 	head_title.text = page_title
 	build()
 
 
 func _fit_width() -> void:
-	if body == null:
-		return
-	var w := clampf(size.x - 36.0 if size.x > 0.0 else get_viewport_rect().size.x - 36.0, 300.0, max_w)
-	body.custom_minimum_size.x = w
-	head.custom_minimum_size.x = w
+	var cs := {"xs": 100000, "sm": 100000, "md": minf(720.0, max_w), "lg": minf(960.0, max_w), "xl": max_w}
+	_hc.max_widths = cs
+	_bc.max_widths = cs
 
 
 func set_title(t: String) -> void:
