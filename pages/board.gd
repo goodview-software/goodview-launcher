@@ -7,7 +7,10 @@ const U := preload("res://ui/universe.gd")
 const MD := preload("res://ui/markdown.gd")
 const Ollama := preload("res://core/ollama.gd")
 const Attach := preload("res://core/attach.gd")
-const FILE := "user://board.json"
+const FILE := "user://board.json"  # ancien fichier unique (migré vers le plan 1)
+const PLANS_DIR := "user://boards/"
+const PLANS_INDEX := "user://boards/index.json"
+const FRAME_COLORS := ["4de1b4", "ff8fb1", "fbbf24", "60a5fa", "a78bfa", "f87171"]
 const IMG_DIR := "user://board_img/"
 ## Types de zones : titre par défaut, mode par défaut, consigne donnée à l'IA.
 const KINDS := {
@@ -58,6 +61,13 @@ var world: Control
 var imgs := {}  # id de zone image -> {b64, tex}
 var menu: PopupMenu
 var view_menu: PopupMenu
+var plans: Array = []  # [{id, name}]
+var plan_id := ""
+var frames: Array = []  # cadres {id,x,y,w,h,title,color}
+var fnodes := {}
+var search_e: LineEdit
+var _rename: ConfirmationDialog
+var _rename_e: LineEdit
 var _deb := {}  # zones en débat
 var reqs := {}  # id -> Ollama.Req en cours
 var drag_from := ""
@@ -78,7 +88,13 @@ func build() -> void:
 	menu = PopupMenu.new()
 	for k in KINDS:
 		menu.add_item(str(KINDS[k].label), KINDS.keys().find(k))
-	menu.id_pressed.connect(func(i: int): _add_zone(str(KINDS.keys()[i])))
+	menu.add_separator()
+	menu.add_item("Cadre (regrouper des zones)", 100)
+	menu.id_pressed.connect(func(i: int):
+		if i == 100:
+			_add_frame()
+		else:
+			_add_zone(str(KINDS.keys()[i])))
 	add_child(menu)
 	var add := W.Btn.new("+ Zone", "primary")
 	add.size_name = "sm"
@@ -86,18 +102,14 @@ func build() -> void:
 	add.pressed.connect(func(): menu.popup(Rect2i(Vector2i(add.get_screen_position() + Vector2(0, add.size.y)), Vector2i(0, 0))))
 	head_right.add_child(add)
 	view_menu = PopupMenu.new()
-	view_menu.add_item("Tout voir", 0)
-	view_menu.add_item("Exporter en Markdown", 1)
-	view_menu.id_pressed.connect(func(i: int):
-		if i == 0:
-			fit_all()
-		else:
-			export_markdown())
+	view_menu.id_pressed.connect(_on_view_menu)
 	add_child(view_menu)
 	var fit := W.Btn.new("Vue", "ghost")
 	fit.size_name = "sm"
 	fit.tooltip_text = "Cadrer toutes les zones / exporter le raisonnement (molette : zoom, glisser le fond : déplacer)"
-	fit.pressed.connect(func(): view_menu.popup(Rect2i(Vector2i(fit.get_screen_position() + Vector2(0, fit.size.y)), Vector2i(0, 0))))
+	fit.pressed.connect(func():
+		_build_view_menu()
+		view_menu.popup(Rect2i(Vector2i(fit.get_screen_position() + Vector2(0, fit.size.y)), Vector2i(0, 0))))
 	head_right.add_child(fit)
 	var qc := W.Btn.new("Chat", "ghost")
 	qc.size_name = "sm"
@@ -118,14 +130,31 @@ func build() -> void:
 	world.position = pan
 	world.scale = Vector2(zoom, zoom)
 	canvas.add_child(world)
+	search_e = LineEdit.new()
+	search_e.placeholder_text = "Rechercher dans le plan… (Entrée : aller à la 1re zone)"
+	search_e.visible = false
+	search_e.position = Vector2(10, 10)
+	search_e.custom_minimum_size = Vector2(280, 0)
+	search_e.text_changed.connect(_apply_search)
+	search_e.text_submitted.connect(func(_t: String): _goto_first_match())
+	canvas.add_child(search_e)
+	_rename = ConfirmationDialog.new()
+	_rename.title = "Renommer le plan"
+	_rename.set_meta("k_nolint", true)
+	_rename_e = LineEdit.new()
+	_rename.add_child(_rename_e)
+	_rename.confirmed.connect(func():
+		_plan_entry()["name"] = _rename_e.text.strip_edges() if _rename_e.text.strip_edges() != "" else "Plan"
+		_save_index())
+	add_child(_rename)
 	if ctx.models.is_empty():
 		_load_models()
+	_init_plans()
 	_load()
-	if zones.is_empty():
+	if zones.is_empty() and frames.is_empty():
 		_add_zone("problem", "De quoi allons-nous parler aujourd'hui ?")
 	get_window().files_dropped.connect(_on_drop)
-	for d in zones:
-		_spawn(d)
+	_spawn_all()
 	_refresh_all()
 	_apply_view()
 
@@ -226,6 +255,8 @@ func _apply_view() -> void:
 	var lod := zoom < LOD
 	for id in nodes:
 		(nodes[id] as Zone).set_lod(lod)
+	for id in fnodes:
+		(fnodes[id] as Frame).set_lod(lod)
 	canvas.queue_redraw()
 	_touch()
 
@@ -274,6 +305,9 @@ func _input(e: InputEvent) -> void:
 		if zone_at(c2w(cp)) != "" and not e.ctrl_pressed and zoom >= LOD:
 			return
 		zoom_at(cp, 1.12 if e.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / 1.12)
+		get_viewport().set_input_as_handled()
+	elif e is InputEventKey and e.pressed and e.keycode == KEY_F and (e.ctrl_pressed or e.meta_pressed):
+		_toggle_search()
 		get_viewport().set_input_as_handled()
 	elif e is InputEventMagnifyGesture:
 		var cp2 := canvas.get_local_mouse_position()
@@ -643,6 +677,223 @@ func _on_drop(files: PackedStringArray) -> void:
 		wp += Vector2(30, 30)
 
 
+# ------------------------------------------------------------------ Plans (plusieurs projets)
+
+func _plan_entry() -> Dictionary:
+	for e in plans:
+		if e.id == plan_id:
+			return e
+	return {}
+
+
+func _plan_file(id := "") -> String:
+	return PLANS_DIR + (plan_id if id == "" else id) + ".json"
+
+
+func _init_plans() -> void:
+	DirAccess.make_dir_recursive_absolute(PLANS_DIR)
+	var v = JSON.parse_string(FileAccess.get_file_as_string(PLANS_INDEX)) if FileAccess.file_exists(PLANS_INDEX) else null
+	if v is Dictionary and not (v.get("plans", []) as Array).is_empty():
+		plans = v.plans
+		plan_id = str(v.get("current", plans[0].id))
+	else:
+		plans = [{"id": "p1", "name": "Plan 1"}]
+		plan_id = "p1"
+		if FileAccess.file_exists(FILE):  # migration de l'ancien plan unique
+			DirAccess.copy_absolute(FILE, _plan_file("p1"))
+		_save_index()
+	if _plan_entry().is_empty():
+		plan_id = str(plans[0].id)
+
+
+func _save_index() -> void:
+	var f := FileAccess.open(PLANS_INDEX, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify({"plans": plans, "current": plan_id}))
+
+
+func _clear_nodes() -> void:
+	for id in reqs:
+		if reqs[id] != null:
+			(reqs[id] as Ollama.Req).cancel()
+	reqs.clear()
+	_deb.clear()
+	for id in nodes:
+		(nodes[id] as Node).queue_free()
+	for id in fnodes:
+		(fnodes[id] as Node).queue_free()
+	nodes.clear()
+	fnodes.clear()
+	zones = []
+	links = []
+	frames = []
+	imgs.clear()
+
+
+func switch_plan(id: String) -> void:
+	if id == plan_id:
+		return
+	_save()
+	_clear_nodes()
+	plan_id = id
+	_save_index()
+	pan = Vector2(24, 24)
+	zoom = 1.0
+	_load()
+	if zones.is_empty() and frames.is_empty():
+		_add_zone("problem", "De quoi allons-nous parler aujourd'hui ?")
+	_spawn_all()
+	_refresh_all()
+	_apply_view()
+
+
+func _new_plan() -> void:
+	var id := "p%d" % Time.get_ticks_msec()
+	plans.append({"id": id, "name": "Plan %d" % (plans.size() + 1)})
+	_save()
+	_clear_nodes()
+	plan_id = id
+	_save_index()
+	pan = Vector2(24, 24)
+	zoom = 1.0
+	_add_zone("problem", "De quoi allons-nous parler ?")
+	_apply_view()
+	_save()
+
+
+func _delete_plan() -> void:
+	if plans.size() <= 1:
+		ctx.notify("Il faut garder au moins un plan.", "error")
+		return
+	var old := plan_id
+	var next := ""
+	for e in plans:
+		if e.id != old:
+			next = str(e.id)
+			break
+	_dirty = false
+	for d in zones:
+		if str(d.get("img", "")) != "":
+			DirAccess.remove_absolute(str(d.img))
+	DirAccess.remove_absolute(_plan_file(old))
+	plans = plans.filter(func(e): return e.id != old)
+	_clear_nodes()
+	plan_id = next
+	_save_index()
+	_load()
+	_spawn_all()
+	_refresh_all()
+	_apply_view()
+
+
+func _build_view_menu() -> void:
+	view_menu.clear()
+	view_menu.add_item("Tout voir", 0)
+	view_menu.add_item("Rechercher (Ctrl+F)", 2)
+	view_menu.add_item("Exporter en Markdown", 1)
+	view_menu.add_separator("Plans")
+	for i in plans.size():
+		view_menu.add_radio_check_item(str(plans[i].name), 1000 + i)
+		view_menu.set_item_checked(view_menu.get_item_index(1000 + i), plans[i].id == plan_id)
+	view_menu.add_item("+ Nouveau plan", 3)
+	view_menu.add_item("Renommer ce plan…", 4)
+	view_menu.add_item("Supprimer ce plan", 5)
+
+
+func _on_view_menu(i: int) -> void:
+	match i:
+		0:
+			fit_all()
+		1:
+			export_markdown()
+		2:
+			_toggle_search()
+		3:
+			_new_plan()
+		4:
+			_rename_e.text = str(_plan_entry().get("name", ""))
+			_rename.popup_centered(Vector2i(320, 110))
+		5:
+			_delete_plan()
+		_:
+			if i >= 1000 and i - 1000 < plans.size():
+				switch_plan(str(plans[i - 1000].id))
+
+
+# ------------------------------------------------------------------ Cadres
+
+func _add_frame() -> void:
+	var c := c2w(canvas.size * 0.5) - Vector2(220, 160) if canvas.size.x > 10 else Vector2(0, 0)
+	var f := {"id": "f%d" % Time.get_ticks_msec(), "x": c.x, "y": c.y, "w": 480.0, "h": 340.0, "title": "Thème",
+			"color": FRAME_COLORS[frames.size() % FRAME_COLORS.size()]}
+	frames.append(f)
+	_spawn_frame(f)
+	_touch()
+
+
+func _spawn_frame(f: Dictionary) -> void:
+	var fr := Frame.new()
+	fr.board = self
+	fr.d = f
+	world.add_child(fr)
+	world.move_child(fr, 0)  # derrière les zones
+	fnodes[f.id] = fr
+	fr.build_ui()
+	fr.set_lod(zoom < LOD)
+
+
+func delete_frame(id: String) -> void:
+	frames = frames.filter(func(f): return f.id != id)
+	if fnodes.has(id):
+		(fnodes[id] as Node).queue_free()
+		fnodes.erase(id)
+	_touch()
+
+
+func _spawn_all() -> void:
+	for f in frames:
+		_spawn_frame(f)
+	for d in zones:
+		_spawn(d)
+
+
+# ------------------------------------------------------------------ Recherche
+
+func _toggle_search() -> void:
+	search_e.visible = not search_e.visible
+	if search_e.visible:
+		search_e.grab_focus()
+	else:
+		search_e.text = ""
+		_apply_search("")
+
+
+func _match(d: Dictionary, q: String) -> bool:
+	if q == "":
+		return true
+	if q in str(d.title).to_lower() or q in str(d.summary).to_lower():
+		return true
+	for m in d.msgs:
+		if q in str(m.content).to_lower():
+			return true
+	return false
+
+
+func _apply_search(q: String) -> void:
+	q = q.strip_edges().to_lower()
+	for d in zones:
+		if nodes.has(d.id):
+			(nodes[d.id] as Control).modulate = Color(1, 1, 1, 1.0 if _match(d, q) else 0.25)
+
+
+func _goto_first_match() -> void:
+	var q := search_e.text.strip_edges().to_lower()
+	for d in zones:
+		if q != "" and _match(d, q):
+			focus_zone(str(d.id))
+			return
+
+
 # ------------------------------------------------------------------ Export
 
 func export_markdown() -> void:
@@ -687,18 +938,19 @@ func export_markdown() -> void:
 func _save() -> void:
 	_dirty = false
 	_save_t = 0.0
-	var f := FileAccess.open(FILE, FileAccess.WRITE)
+	var f := FileAccess.open(_plan_file(), FileAccess.WRITE)
 	if f != null:
-		f.store_string(JSON.stringify({"zones": zones, "links": links, "pan": [pan.x, pan.y], "zoom": zoom}))
+		f.store_string(JSON.stringify({"zones": zones, "links": links, "frames": frames, "pan": [pan.x, pan.y], "zoom": zoom}))
 
 
 func _load() -> void:
-	if not FileAccess.file_exists(FILE):
+	if not FileAccess.file_exists(_plan_file()):
 		return
-	var v = JSON.parse_string(FileAccess.get_file_as_string(FILE))
+	var v = JSON.parse_string(FileAccess.get_file_as_string(_plan_file()))
 	if v is Dictionary:
 		zones = v.get("zones", [])
 		links = v.get("links", [])
+		frames = v.get("frames", [])
 		var p = v.get("pan", [24, 24])
 		pan = Vector2(float(p[0]), float(p[1]))
 		zoom = clampf(float(v.get("zoom", 1.0)), ZMIN, ZMAX)
@@ -1150,3 +1402,124 @@ class PicBox extends Control:
 	func _gui_input(e: InputEvent) -> void:
 		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT and e.pressed:
 			board.pick_image(str(d.id))
+
+
+## Cadre coloré pour regrouper des zones par thème : le déplacer emporte les zones qu'il contient.
+class Frame extends Control:
+	var board: Node
+	var d: Dictionary
+	var bar: Control
+	var title_e: LineEdit
+	var tools: HBoxContainer
+	var handle: Control
+	var mode := ""
+	var grab := Vector2.ZERO
+	var held: Array = []  # zones emportées [{d, node, off}]
+	var lod := false
+
+	func build_ui() -> void:
+		position = Vector2(float(d.x), float(d.y))
+		size = Vector2(float(d.w), float(d.h))
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		bar = Control.new()
+		bar.mouse_filter = Control.MOUSE_FILTER_STOP
+		bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
+		bar.offset_bottom = 38
+		bar.gui_input.connect(_bar_input)
+		add_child(bar)
+		var h := HBoxContainer.new()
+		h.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		h.offset_left = 6
+		h.offset_right = -6
+		h.mouse_filter = Control.MOUSE_FILTER_PASS
+		bar.add_child(h)
+		title_e = LineEdit.new()
+		title_e.text = str(d.title)
+		title_e.flat = true
+		title_e.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		title_e.text_changed.connect(func(t: String):
+			d.title = t
+			board._touch())
+		h.add_child(title_e)
+		tools = HBoxContainer.new()
+		h.add_child(tools)
+		var cb := Button.new()
+		cb.text = "◼"
+		cb.tooltip_text = "Changer la couleur"
+		cb.pressed.connect(func():
+			var i: int = board.FRAME_COLORS.find(str(d.color))
+			d.color = board.FRAME_COLORS[(i + 1) % board.FRAME_COLORS.size()]
+			queue_redraw()
+			board._touch())
+		tools.add_child(cb)
+		var xb := Button.new()
+		xb.text = "✕"
+		xb.tooltip_text = "Supprimer le cadre (les zones restent)"
+		xb.pressed.connect(func(): board.delete_frame(str(d.id)))
+		tools.add_child(xb)
+		handle = Control.new()
+		handle.mouse_filter = Control.MOUSE_FILTER_STOP
+		handle.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+		handle.offset_left = -26
+		handle.offset_top = -26
+		handle.gui_input.connect(_handle_input)
+		add_child(handle)
+
+	func set_lod(v: bool) -> void:
+		lod = v
+		tools.visible = not v
+		title_e.editable = not v
+		title_e.mouse_filter = Control.MOUSE_FILTER_IGNORE if v else Control.MOUSE_FILTER_STOP
+		title_e.add_theme_font_size_override("font_size", clampi(int(22.0 / maxf(board.zoom, 0.12)), 16, 140) if v else 16)
+		handle.visible = not v
+		queue_redraw()
+
+	func _draw() -> void:
+		var col := Color(str(d.color))
+		draw_rect(Rect2(Vector2.ZERO, size), Color(col, 0.07))
+		draw_rect(Rect2(Vector2.ZERO, size), Color(col, 0.55), false, 2.0)
+		draw_rect(Rect2(0, 0, size.x, 38), Color(col, 0.18))
+		for i in 3:
+			draw_rect(Rect2(size.x - 8 - i * 5, size.y - 5, 2, 2), Color(col, 0.9))
+			draw_rect(Rect2(size.x - 5, size.y - 8 - i * 5, 2, 2), Color(col, 0.9))
+
+	func _wm() -> Vector2:
+		return board.c2w(board.canvas.get_local_mouse_position())
+
+	func _bar_input(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+			if e.pressed:
+				mode = "drag"
+				grab = _wm() - position
+				held.clear()
+				var r := Rect2(position, size)
+				for z in board.zones:
+					if r.has_point(Vector2(float(z.x) + float(z.w) * 0.5, float(z.y) + float(z.h) * 0.5)) and board.nodes.has(z.id):
+						held.append({"d": z, "node": board.nodes[z.id], "off": Vector2(float(z.x), float(z.y)) - position})
+			else:
+				mode = ""
+				board._touch()
+		elif e is InputEventMouseMotion and mode == "drag":
+			position = _wm() - grab
+			d.x = position.x
+			d.y = position.y
+			for hz in held:
+				var np: Vector2 = position + hz.off
+				hz.d.x = np.x
+				hz.d.y = np.y
+				(hz.node as Control).position = np
+			board.canvas.queue_redraw()
+
+	func _handle_input(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+			if e.pressed:
+				mode = "resize"
+				grab = _wm() - size
+			else:
+				mode = ""
+				board._touch()
+		elif e is InputEventMouseMotion and mode == "resize":
+			size = (_wm() - grab).max(Vector2(200, 120))
+			d.w = size.x
+			d.h = size.y
+			queue_redraw()
