@@ -5,6 +5,8 @@ extends Control
 const Ctx := preload("res://core/ctx.gd")
 const Router := preload("res://ui/router.gd")
 const T := preload("res://ui/theme.gd")
+const Tk := preload("res://kit/tokens.gd")
+const Pixelize := preload("res://kit/pixelize.gd")
 const APP_TITLE := "Goodview Launcher"
 
 var ctx: Ctx
@@ -13,6 +15,7 @@ var _save_timer: Timer
 
 
 func _ready() -> void:
+	Tk.set_pixel(true)  # skin pixel art commun aux apps Goodview
 	theme = T.make_theme()
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	if OS.get_environment("GL_TEST") == "1" and ResourceLoader.exists("res://test_run.gd"):
@@ -33,6 +36,9 @@ func _ready() -> void:
 	_restore_window()
 	router.push(ctx.start_page() if ctx.store.welcomed else "welcome")
 	ctx.start()
+	Pixelize.install(self)
+	if OS.get_environment("GL_PAGE") != "":  # débogage : ouvre directement une page d'onglet
+		router.go_tab(OS.get_environment("GL_PAGE"))
 
 
 func _on_page(page_title: String) -> void:

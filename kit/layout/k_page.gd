@@ -47,7 +47,7 @@ func build_shell() -> void:
 		back_btn = Btn.make("", "icon", "md", "chevron-left")
 		back_btn.pressed.connect(func(): back_pressed.emit())
 		head_left.add_child(back_btn)
-		head_left.move_to_front()
+		head.move_child(head_left, 0)
 	_hc.add_child(head)
 	header = head
 	scroll = ScrollContainer.new()

@@ -26,6 +26,7 @@ var status := "init"  # init | offline | nomodel | ready
 var generating := false
 var attachments: Array = []
 var strip: ChatUI.Strip
+var stage: ChatUI.Stage
 var model_btn: W.Btn
 var input: TextEdit
 var send_btn: ChatUI.RoundBtn
@@ -53,8 +54,8 @@ var _undo_chat: Dictionary = {}
 
 
 func _init() -> void:
-	page_title = "Chat"
-	has_back = false
+	page_title = "Assistant IA"
+	has_back = true
 	max_w = 780.0
 
 
@@ -89,6 +90,15 @@ func build() -> void:
 	sm.add_child(strip)
 	_strip_c = strip
 	_chrome.append(sm)
+	# scène fixe : la place de l'assistant (ne défile pas) + route en perspective vers le chat
+	var sc: Container = K.Container_.new()
+	sc.max_widths = caps
+	extra_containers.append(sc)
+	_outer.add_child(sc)
+	_outer.move_child(sc, 2)
+	stage = ChatUI.Stage.new(int(chat.assistant))
+	sc.add_child(stage)
+	_chrome.append(sc)
 	# messages
 	msgs = VBoxContainer.new()
 	msgs.add_theme_constant_override("separation", 16)
@@ -101,6 +111,7 @@ func build() -> void:
 	_render_all()
 	if generating:
 		strip.set_mode(chat.assistant, "talk")
+		stage.mode = "talk"
 	if status == "init":
 		_refresh_models()
 
@@ -135,6 +146,16 @@ func _build_composer() -> void:
 	input.custom_minimum_size = Vector2(0, 46)
 	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	input.add_theme_font_size_override("font_size", 16)
+	for st in ["normal", "focus", "read_only"]:  # champ « Minecraft » : noir, cadre gris 2 px (blanc au focus)
+		var mc := StyleBoxFlat.new()
+		mc.bg_color = Color(0, 0, 0, 0.85)
+		mc.border_color = Color("a0a0a0") if st == "focus" else Color("5a5a5a")
+		mc.set_border_width_all(2)
+		mc.set_content_margin_all(10)
+		mc.set_meta("px", true)
+		input.add_theme_stylebox_override(st, mc)
+	input.add_theme_color_override("font_color", Color.WHITE)
+	input.add_theme_color_override("font_placeholder_color", Color("8a8a8a"))
 	input.gui_input.connect(_on_input_key)
 	input.text_changed.connect(_on_input_changed)
 	input.text = _draft
@@ -179,7 +200,18 @@ func on_show() -> void:
 
 
 func on_back() -> bool:
+	if router.stack.size() == 1:  # sous-app : retour à la grille d'apps
+		router.go_tab("home")
+		return true
 	return false
+
+
+## Aligne la scène fixe sur l'assistant courant (modes normaux au repos).
+func _stage_sync() -> void:
+	if stage != null and is_instance_valid(stage):
+		stage.ai = int(chat.assistant)
+		stage.mode = "idle"
+		stage.speed = 1.0
 
 
 # ------------------------------------------------------------------ Modèles / état d'Ollama
@@ -283,6 +315,7 @@ func _after_chat_change() -> void:
 	if strip != null and is_instance_valid(strip):
 		strip.select(int(chat.assistant))
 		strip.reset_modes()
+		_stage_sync()
 	_update_chip()
 	_render_all()
 	_update_send()
@@ -312,6 +345,7 @@ func switch_assistant(i: int) -> void:
 	ctx.set_active(i)  # recolore l'app (la page se reconstruit)
 	if strip != null and is_instance_valid(strip):
 		strip.select(i)
+	_stage_sync()
 	_update_chip()
 	_render_all()
 
@@ -365,25 +399,12 @@ func _render_empty() -> void:
 			sv2.action.connect(func(): router.push("chat_settings"))
 			msgs.add_child(sv2)
 			return
-	var sv3 := W.StateView.new("idle", chat.assistant, u.name, "« %s »" % u.motto, "", 150)
-	msgs.add_child(sv3)
-	var spec := W.label(u.specialty, 13, T.DIM, msgs)
-	spec.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var mo := W.label("« %s »" % u.motto, 15, T.DIM, msgs)
+	mo.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var sug: Array = SUGGEST.get(u.id, [])
-	var grid := GridContainer.new()
-	grid.columns = 2
-	grid.add_theme_constant_override("h_separation", 8)
-	grid.add_theme_constant_override("v_separation", 8)
-	msgs.add_child(grid)
-	for s in sug:
-		var r := W.Row.new()
-		r.sb.bg_color = T.CARD
-		r.add_theme_stylebox_override("panel", T.style(T.CARD,18, 12))
-		r.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		r.pressed.connect(func(): send_text(s))
-		var l := W.label(s, 14, T.TEXT, r)
-		l.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		grid.add_child(r)
+	var board := ChatUI.Board.new("Réponses rapides", sug)
+	board.picked.connect(func(s: String): send_text(s))
+	msgs.add_child(board)
 
 
 func _add_view(i: int) -> void:
@@ -417,12 +438,7 @@ func _user_view(i: int, m: Dictionary) -> void:
 	for b64 in m.get("images", []):
 		var tex := Attach.tex_from_b64(str(b64))
 		if tex != null:
-			var tr := TextureRect.new()
-			tr.texture = tex
-			tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-			tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT
-			tr.custom_minimum_size = Vector2(0, 120)
-			v.add_child(tr)
+			v.add_child(ChatUI.PicFrame.new(tex, 120))
 	if str(m.content) != "":
 		var l := W.label(str(m.content), 16, T.TEXT, v)
 		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -843,6 +859,10 @@ func _on_event(kind: String, d: Dictionary) -> void:
 	match kind:
 		"speaker":
 			strip.set_mode(int(d.ai), str(d.mode), _speed())
+			if stage != null and is_instance_valid(stage):
+				stage.ai = int(d.ai)
+				stage.mode = str(d.mode)
+				stage.speed = _speed()
 		"token":
 			_tok_n += 1
 			if int(d.id) == -1:
@@ -904,9 +924,11 @@ func _finish(text: String, tps: float, err: String) -> void:
 		(func():
 			await get_tree().create_timer(1.6).timeout
 			if not generating and is_instance_valid(strip):
-				strip.reset_modes()).call()
+				strip.reset_modes()
+				_stage_sync()).call()
 	else:
 		strip.reset_modes()
+		_stage_sync()
 	if not chat.messages.is_empty():
 		_scroll_end.call_deferred()
 

@@ -3,6 +3,7 @@ extends "res://pages/page.gd"
 ## + grille d'apps à 2 colonnes. Écran large : panneau à gauche, grille à droite ; écran étroit : une colonne.
 
 const AppCard := preload("res://ui/app_card.gd")
+const U := preload("res://ui/universe.gd")
 const SORTS := [["recent", "Récents"], ["az", "A–Z"], ["updates", "Mises à jour"]]
 const SEARCH_MIN := 6  # la recherche apparaît au-delà de ce nombre d'apps
 const WIDE_MIN := 900.0  # largeur de page à partir de laquelle le panneau passe à gauche
@@ -265,6 +266,7 @@ func _render_list() -> void:
 	if _list == null or not is_instance_valid(_list):
 		return
 	_clear(_list)
+	_list.add_child(_assistant_grid())
 	var cat := ctx.catalog
 	var n := cat.apps.size()
 	_seg.visible = n > 1
@@ -292,6 +294,24 @@ func _render_list() -> void:
 	var g2 := _grid()
 	for a in apps:
 		g2.add_child(_card(a))
+
+
+## Sous-app intégrée « Assistant IA » : carte toujours présente en tête de la grille (ouvre la page de chat).
+func _assistant_grid() -> Control:
+	var g: Container = K.Grid.new()
+	g.min_card_width = 220
+	g.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var u: Dictionary = U.get_u(ctx.active)
+	var orb := W.Orb.new()
+	orb.variant = ctx.active
+	orb.anim = "idle"
+	orb.set_process(true)
+	var c := AppCard.new()
+	c.btn_text = "Ouvrir"
+	c.setup(orb, "Assistant IA", "%s et 7 autres assistants locaux (Ollama)." % u.name, ["Intégré", T.OK], false, false)
+	c.pressed.connect(func(): router.go_tab("chat"))
+	g.add_child(c)
+	return g
 
 
 func _grid() -> Container:

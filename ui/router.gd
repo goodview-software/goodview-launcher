@@ -17,7 +17,8 @@ const PAGES := {
 	"chat_settings": preload("res://pages/chat_settings.gd"),
 	"kit": preload("res://pages/kit_page.gd"),
 }
-const TABS := ["home", "chat", "profile"]  # pages racines de la barre de navigation (conservées en mémoire)
+const TABS := ["home", "chat", "profile"]  # pages racines conservées en mémoire (le chat est une sous-app : pas dans la barre)
+const NAV_TABS := ["home", "profile"]  # onglets de la barre basse
 const Nav := preload("res://ui/nav.gd")
 const SLIDE := 28.0
 
@@ -94,7 +95,7 @@ func _on_theme() -> void:
 
 func _update_nav() -> void:
 	var c := current()
-	var show: bool = c != null and c.get("page_id") in TABS and stack.size() == 1
+	var show: bool = c != null and c.get("page_id") in NAV_TABS and stack.size() == 1
 	nav.visible = show
 	stage.offset_bottom = -Nav.HEIGHT if show else 0.0
 	if show:

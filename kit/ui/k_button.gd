@@ -5,7 +5,7 @@ var text := "": set = _set_text
 var kind := "secondary": set = _set_kind
 var size_name := "md": set = _set_sz
 var icon := "": set = _set_icon
-var icon_right := "": set = _set_icon
+var icon_right := "": set = _set_icon_r
 var loading := false: set = _set_loading
 var _spin := 0.0
 
@@ -30,7 +30,11 @@ func _set_kind(v: String) -> void:
 func _set_sz(v: String) -> void:
 	size_name = v
 	_fit()
-func _set_icon(_v: String) -> void:
+func _set_icon(v: String) -> void:
+	icon = v
+	_fit()
+func _set_icon_r(v: String) -> void:
+	icon_right = v
 	_fit()
 func _set_loading(v: bool) -> void:
 	loading = v

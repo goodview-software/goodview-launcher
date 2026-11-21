@@ -131,9 +131,9 @@ func model_for(ai: int) -> String:
 	return U.pick_model(ai, models, ollama.bad_models)
 
 
-## Page affichée au démarrage : "chat" (défaut) ou "home" (Apps).
+## Page affichée au démarrage : "home" (Apps, défaut) ou "chat" (l'assistant IA est une sous-app).
 func start_page() -> String:
-	return "home" if str(store.get_s("ui", "start", "chat")) == "home" else "chat"
+	return "chat" if str(store.get_s("ui", "start", "home")) == "chat" else "home"
 
 
 ## "soon" (pas de release), "nolinux", "none" (installable), "ok" (à jour), "update"

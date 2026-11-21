@@ -2,7 +2,13 @@ extends RefCounted
 ## Icônes dessinées (traits arrondis) : un seul langage visuel pour toute l'application.
 
 
+const Tk := preload("res://kit/tokens.gd")
+const KPx := preload("res://kit/ui/px.gd")
+
 static func box(ci: CanvasItem, r: Rect2, rad: float, col: Color) -> void:
+	if Tk.pixel:
+		KPx.panel(ci, r, col, Color(0, 0, 0, 0), false)
+		return
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = col
 	sb.set_corner_radius_all(int(rad))

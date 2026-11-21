@@ -220,7 +220,7 @@ func run(host: Node) -> void:
 	check(w.step == 1, "bienvenue écran 2")
 	w.finish()
 	await frames()
-	check(ctx.store.welcomed and router.current().get_script() == Router.PAGES["chat"], "fin de bienvenue -> chat (page par défaut)")
+	check(ctx.store.welcomed and router.current().get_script() == Router.PAGES["home"], "fin de bienvenue -> Apps (page par défaut)")
 
 	# --- transitions animées (sans instant) : pas d'erreur
 	router.instant = false
@@ -383,12 +383,12 @@ func run_ui() -> void:
 	await frames(2)
 
 	# --- barre de navigation : 3 onglets, chat par défaut
-	check(ctx.start_page() == "chat", "le chat est la page de démarrage par défaut")
+	check(ctx.start_page() == "home", "les Apps sont la page de démarrage par défaut (l'assistant est une sous-app)")
 	handler = default_handler
-	for id in ["chat", "profile", "home", "chat"]:
+	for id in ["profile", "home", "chat", "home"]:
 		var pg: Control = router.go_tab(id)
 		await frames(2)
-		check(router.current() == pg and router.nav.visible and router.nav.current == id, "onglet " + id)
+		check(router.current() == pg and router.nav.visible == (id != "chat") and (id == "chat" or router.nav.current == id), "onglet " + id)
 		label_check(pg, "onglet " + id)
 	router.go_tab("home")
 	router.push("settings")
@@ -397,9 +397,9 @@ func run_ui() -> void:
 	router.back()
 	await frames()
 	check(router.nav.visible, "barre revenue")
-	ctx.store.set_s("ui", "start", "home")
-	check(ctx.start_page() == "home", "réglage de page de démarrage")
 	ctx.store.set_s("ui", "start", "chat")
+	check(ctx.start_page() == "chat", "réglage de page de démarrage")
+	ctx.store.set_s("ui", "start", "home")
 
 	# --- Apps : grille adaptative avec 0, 1, 4 et 7 apps, de 360 à 1100 px
 	for n in [0, 1, 4, 7]:
@@ -410,7 +410,7 @@ func run_ui() -> void:
 			await frames(3)
 			check(home._list.get_child_count() > 0, "apps : %d apps, %d px" % [n, w])
 			if n > 0:
-				var g: Container = home._list.get_child(0)
+				var g: Container = home._list.get_child(1)
 				check(g.get_script() == K.Grid and g.get_child_count() == n, "grille adaptative (%d)" % n)
 				check(g.columns == g.cols_for(g.size.x) and (w > 700 or g.columns <= 2), "colonnes adaptées à %d px : %d" % [w, g.columns])
 				if w == 1100 and n >= 4:

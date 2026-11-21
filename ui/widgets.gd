@@ -5,6 +5,7 @@ extends RefCounted
 const T := preload("res://ui/theme.gd")
 const Ico := preload("res://ui/icons.gd")
 const U := preload("res://ui/universe.gd")
+const KPx := preload("res://kit/ui/px.gd")
 const K := preload("res://kit/k.gd")
 const Tk := preload("res://kit/tokens.gd")
 const KS := preload("res://kit/ui/ks.gd")
@@ -196,8 +197,9 @@ class IconBtn extends K.Press:
 		else:
 			Ico.draw_kind(self, kind, c, d / 44.0 * 0.62, fg)
 		if badge:
-			draw_circle(size * 0.5 + Vector2(d, -d) * 0.28, 5.0, Tk.surface0)
-			draw_circle(size * 0.5 + Vector2(d, -d) * 0.28, 3.5, Tk.warn)
+			var bq := (size * 0.5 + Vector2(d, -d) * 0.28 - Vector2(5, 5)).round()
+			draw_rect(Rect2(bq, Vector2(10, 10)), Color.BLACK)
+			draw_rect(Rect2(bq + Vector2(2, 2), Vector2(6, 6)), Tk.warn)
 
 
 ## Bouton texte : "primary", "soft" (neutre), "danger", "ghost".
@@ -273,10 +275,10 @@ class Orb extends Control:
 	func _draw() -> void:
 		var c := size / 2.0
 		var r := minf(size.x, size.y) * 0.26
-		for i in 4:
-			var rr := r + 8.0 * (i + 1) + level * 14.0 + sin(pulse + i) * 2.0
-			draw_circle(c, rr, Color(color, 0.11 - i * 0.025))
-		draw_circle(c, r, Color(color, 0.16))
+		for i in 4:  # halos carrés (pixel art)
+			var rr := floorf((r + 8.0 * (i + 1) + level * 14.0 + sin(pulse + i) * 2.0) / 4.0) * 4.0
+			draw_rect(Rect2(c - Vector2(rr, rr), Vector2(rr, rr) * 2.0), Color(color, 0.11 - i * 0.025))
+		draw_rect(Rect2(c - Vector2(r, r), Vector2(r, r) * 2.0), Color(color, 0.16))
 		var sc := maxi(1, int(size.y * 0.72 / 32.0))
 		var px := 32 * sc
 		var u: Dictionary = U.get_u(variant)
@@ -315,7 +317,8 @@ class AppIcon extends Control:
 		var side := s * (0.62 if halo else 1.0)
 		if halo:
 			for i in 4:
-				draw_circle(c, side * 0.5 + 10.0 * (i + 1) + sin(pulse + i) * 2.0, Color(tint, 0.10 - i * 0.022))
+				var rr := floorf((side * 0.5 + 10.0 * (i + 1) + sin(pulse + i) * 2.0) / 4.0) * 4.0
+				draw_rect(Rect2(c - Vector2(rr, rr), Vector2(rr, rr) * 2.0), Color(tint, 0.10 - i * 0.022))
 		var r := Rect2(c - Vector2(side, side) / 2.0, Vector2(side, side))
 		Ico.box(self, r, side * 0.24, Color("232a34") if tex != null else tint.darkened(0.35))
 		if tex != null:
@@ -327,8 +330,9 @@ class AppIcon extends Control:
 					HORIZONTAL_ALIGNMENT_CENTER, side, fs, Color.WHITE)
 		if badge.a > 0.0:
 			var bp := r.position + Vector2(side, 0) - Vector2(side * 0.08, -side * 0.08)
-			draw_circle(bp, side * 0.14, T.BG)
-			draw_circle(bp, side * 0.1, badge)
+			var bd := maxf(10.0, side * 0.2)
+			draw_rect(Rect2(bp - Vector2(bd, bd) * 0.5, Vector2(bd, bd)), Color.BLACK)
+			draw_rect(Rect2(bp - Vector2(bd, bd) * 0.5 + Vector2(2, 2), Vector2(bd - 4, bd - 4)), badge)
 
 
 ## Avatar rond d'une variante de mascotte ; cliquable (sélecteur) ou décoratif.
@@ -361,12 +365,14 @@ class Avatar extends Tap:
 		var r := minf(size.x, size.y) / 2.0
 		if down:
 			r *= 0.95
-		draw_circle(c, r, (BODIES[variant] as Color).darkened(0.62 - (0.1 if hot else 0.0)))
+		var rc := Rect2(c - Vector2(r, r), Vector2(r, r) * 2.0)
+		KPx.panel(self, rc.grow(-1), (BODIES[variant] as Color).darkened(0.62 - (0.1 if hot else 0.0)), (T.OK if selected else Color("0b0e12")), false, 1)
 		var s := maxi(int(r * 2.0 * 0.86 / 32.0) * 32, 32)
 		draw_texture_rect_region(SHEET, Rect2((c - Vector2(s, s) / 2.0).round(), Vector2(s, s)), Rect2(variant * 32, 0, 32, 32))
-		draw_arc(c, r - 1.5, 0.0, TAU, 48, T.OK if selected else Color(1, 1, 1, 0.12), 3.0 if selected else 1.5, true)
 		if badge:
-			draw_circle(c + Vector2(r * 0.72, -r * 0.72), r * 0.27, T.BAD)
+			var bp2 := (c + Vector2(r * 0.55, -r * 1.05)).round()
+			draw_rect(Rect2(bp2, Vector2(10, 10)), Color.BLACK)
+			draw_rect(Rect2(bp2 + Vector2(2, 2), Vector2(6, 6)), T.BAD)
 
 
 ## Ligne cliquable (accueil) : fond au survol, plus marqué à la pression.

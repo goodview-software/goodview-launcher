@@ -138,7 +138,17 @@ func _draw_field(f: Control) -> void:
 	elif _foc:
 		bc = Tokens.accent
 		bw = 2
-	f.draw_style_box(KS.box(Tokens.surface3, Tokens.R_MD, 0, 0, bc, bw), Rect2(Vector2.ZERO, f.size))
+	if Tokens.pixel:  # champ « Minecraft » : fond noir translucide, cadre gris 2 px (blanc au focus), biseau intérieur sombre
+		var rc := Rect2(Vector2.ZERO, f.size)
+		var frame := Color("a0a0a0") if _foc else Color("5a5a5a")
+		if error != "":
+			frame = Tokens.danger
+		f.draw_rect(rc, Color(0, 0, 0, 0.85))
+		f.draw_rect(rc, frame, false, 2.0)
+		f.draw_rect(Rect2(2, 2, f.size.x - 4, 2), Color(1, 1, 1, 0.0 if not _foc else 0.12))
+		f.draw_rect(Rect2(2, f.size.y - 4, f.size.x - 4, 2), Color(1, 1, 1, 0.06))
+	else:
+		f.draw_style_box(KS.box(Tokens.surface3, Tokens.R_MD, 0, 0, bc, bw), Rect2(Vector2.ZERO, f.size))
 	if icon != "":
 		var t := Icon.texture(icon, 20)
 		if t != null:

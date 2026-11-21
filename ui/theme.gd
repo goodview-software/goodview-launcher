@@ -3,6 +3,7 @@ extends RefCounted
 
 const U := preload("res://ui/universe.gd")
 const Tk := preload("res://kit/tokens.gd")
+const Pixelize := preload("res://kit/pixelize.gd")
 const ThemeBuilder := preload("res://kit/theme_builder.gd")
 # Couleurs de l'univers actif : variables statiques mises à jour par apply() (les widgets les relisent au dessin).
 static var BG := Color("0e1116")
@@ -45,11 +46,19 @@ static func apply(i: int) -> bool:
 static func style(bg: Color, rad := 14, pad := 14) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = bg
-	sb.set_corner_radius_all(rad)
 	sb.set_content_margin_all(pad)
+	if Tk.pixel:  # pixel art : coins coupés (chanfrein), bordure 2 px, sans anticrénelage
+		sb.set_corner_radius_all(4 if rad >= 8 else 0)
+		sb.corner_detail = 1
+		sb.anti_aliasing = false
+		if bg.a > 0.2:
+			sb.border_color = bg.darkened(0.5)
+			sb.set_border_width_all(Tk.PX)
+		return sb
+	sb.set_corner_radius_all(rad)
 	sb.anti_aliasing_size = 1.2
 	return sb
 
 
 static func make_theme() -> Theme:
-	return ThemeBuilder.build()
+	return Pixelize.theme(ThemeBuilder.build()) if Tk.pixel else ThemeBuilder.build()

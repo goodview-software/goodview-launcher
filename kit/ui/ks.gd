@@ -6,7 +6,18 @@ const Fonts := preload("res://kit/fonts.gd")
 static func box(bg: Color, r := Tokens.R_MD, ph := 0, pv := -1, bc := Color(0, 0, 0, 0), bw := 0) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = bg
+	if Tokens.pixel:
+		# coins carrés ; bordure 2 px (assombrie par défaut) sur tout ce qui a un fond
+		r = 4 if (r >= 8 and r < Tokens.R_FULL) else 0  # chanfrein = coin pixel
+		if bw == 0 and bg.a > 0.2:
+			bc = bg.darkened(0.55)
+			bw = Tokens.PX
+		elif bw > 0:
+			bw = maxi(bw, Tokens.PX)
+		sb.anti_aliasing = false
 	sb.set_corner_radius_all(r)
+	if Tokens.pixel:
+		sb.corner_detail = 1
 	sb.content_margin_left = ph
 	sb.content_margin_right = ph
 	sb.content_margin_top = ph if pv < 0 else pv
@@ -14,7 +25,8 @@ static func box(bg: Color, r := Tokens.R_MD, ph := 0, pv := -1, bc := Color(0, 0
 	if bw > 0:
 		sb.border_color = bc
 		sb.set_border_width_all(bw)
-	sb.anti_aliasing_size = 1.0
+	if not Tokens.pixel:
+		sb.anti_aliasing_size = 1.0
 	return sb
 
 ## Label stylé : size = taille Tokens.FS_*, color null = texte, weight 400..700, wrap = retour à la ligne.

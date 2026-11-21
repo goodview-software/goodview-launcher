@@ -4,6 +4,8 @@ extends "res://kit/ui/k_card.gd"
 
 signal fav_toggled
 
+var btn_text := "Voir l'app"
+
 const T := preload("res://ui/theme.gd")
 const W := preload("res://ui/widgets.gd")
 const Btn_ := preload("res://kit/ui/k_button.gd")
@@ -17,17 +19,20 @@ func _init() -> void:
 
 
 ## Remplit la carte. icon : Control (AppIcon) déjà créé ; status : [texte, couleur].
-func setup(icon: Control, title: String, tagline: String, status: Array, fav: bool) -> void:
+func setup(icon: Control, title: String, tagline: String, status: Array, fav: bool, show_star := true) -> void:
 	var v := KS.vbox(self, Tokens.S2)
 	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var top := HBoxContainer.new()
 	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(top)
 	KS.spacer(top)
-	var st := W.IconBtn.new("star_on" if fav else "star", 44)
-	st.tooltip_text = "Retirer des favoris" if fav else "Ajouter aux favoris"
-	st.pressed.connect(func(): fav_toggled.emit())
-	top.add_child(st)
+	if show_star:
+		var st := W.IconBtn.new("star_on" if fav else "star", 44)
+		st.tooltip_text = "Retirer des favoris" if fav else "Ajouter aux favoris"
+		st.pressed.connect(func(): fav_toggled.emit())
+		top.add_child(st)
+	else:
+		top.custom_minimum_size = Vector2(0, 44)
 	icon.custom_minimum_size = Vector2(0, 88)
 	icon.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	v.add_child(icon)
@@ -44,7 +49,7 @@ func setup(icon: Control, title: String, tagline: String, status: Array, fav: bo
 	pr.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	v.add_child(pr)
 	W.pill(pr, status[0], status[1])
-	var b := Btn_.make("Voir l'app", "primary", "md")
+	var b := Btn_.make(btn_text, "primary", "md")
 	b.size_flags_horizontal = Control.SIZE_FILL
 	b.pressed.connect(func(): pressed.emit())
 	v.add_child(b)

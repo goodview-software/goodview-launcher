@@ -89,6 +89,14 @@ static func bp_at_least(w: float, name: String) -> bool:
 const DUR := 0.15  # 120-180 ms
 const RING_W := 2.0
 
+# --- Skin pixel art : coins carrés, bordure 2 px, ombre dure, police pixel, icônes sur grille
+static var pixel := false
+const PX := 2  # taille d'un « pixel » de bordure/ombre
+
+static func set_pixel(on: bool) -> void:
+	pixel = on
+	bus.changed.emit()
+
 # --- Couleurs (dynamiques)
 static var accent := Color("4de1b4")
 static var pal: Array = []  # 11 teintes : 50,100,200,...,900,950
@@ -173,6 +181,11 @@ static func fade_to(node: Node, acc: Color, overrides := {}, dur := 0.35) -> voi
 
 # --- Ombres douces
 static func shadow(sb: StyleBoxFlat, level := 1) -> StyleBoxFlat:
+	if pixel:  # ombre dure décalée, sans flou
+		sb.shadow_size = 1 if level > 0 else 0
+		sb.shadow_offset = Vector2(PX * (1 + mini(level, 2)), PX * (1 + mini(level, 2)))
+		sb.shadow_color = Color(0, 0, 0, 0.55)
+		return sb
 	match level:
 		0:
 			sb.shadow_size = 0

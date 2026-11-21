@@ -37,6 +37,8 @@ const Stack := preload("res://kit/layout/k_stack.gd")
 const Row := preload("res://kit/layout/k_row.gd")
 const HStack := preload("res://kit/layout/k_hstack.gd")
 const Page := preload("res://kit/layout/k_page.gd")
+const Px := preload("res://kit/ui/px.gd")
+const NavBar := preload("res://kit/ui/k_navbar.gd")
 
 ## Raccourcis
 static func label(parent: Node, text: String, size := Tokens.FS_BASE, color: Variant = null, weight := 400, wrap := true) -> Label:
