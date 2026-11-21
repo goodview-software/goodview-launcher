@@ -67,6 +67,8 @@ func build() -> void:
 	world.position = pan
 	world.scale = Vector2(zoom, zoom)
 	canvas.add_child(world)
+	if ctx.models.is_empty():
+		_load_models()
 	_load()
 	if zones.is_empty():
 		_add_zone("De quoi allons-nous parler aujourd'hui ?")
@@ -85,7 +87,8 @@ func _process(dt: float) -> void:
 
 func _exit_tree() -> void:
 	for id in reqs:
-		(reqs[id] as Ollama.Req).cancel()
+		if reqs[id] != null:
+			(reqs[id] as Ollama.Req).cancel()
 	if _dirty:
 		_save()
 
@@ -235,7 +238,8 @@ func zone_at(world_pos: Vector2, except := "") -> String:
 
 func delete_zone(id: String) -> void:
 	if reqs.has(id):
-		(reqs[id] as Ollama.Req).cancel()
+		if reqs[id] != null:
+			(reqs[id] as Ollama.Req).cancel()
 		reqs.erase(id)
 	zones = zones.filter(func(d): return d.id != id)
 	links = links.filter(func(l): return l.from != id and l.to != id)
@@ -324,6 +328,12 @@ func _history(d: Dictionary, upto: int) -> Array:
 
 func _stream(d: Dictionary, msgs: Array, setter: Callable) -> void:
 	var id := str(d.id)
+	reqs[id] = null  # réservé pendant le chargement des modèles
+	_refresh_all()
+	if ctx.models.is_empty():
+		await _load_models()
+		if not is_instance_valid(self) or not reqs.has(id):
+			return
 	var model := _model(d)
 	if model == "":
 		setter.call("(Aucun modèle Ollama disponible : installe-en un depuis l'Assistant IA.)")
@@ -346,6 +356,20 @@ func _stream(d: Dictionary, msgs: Array, setter: Callable) -> void:
 		if not ok and kind != "cancel":
 			setter.call(str(acc[0]) + "\n(Erreur : %s)" % Ollama.friendly(kind, msg, model))
 		_finish(id))
+
+
+## Liste les modèles Ollama installés (la page Chat le fait déjà ; le plan doit aussi pouvoir le faire seul).
+func _load_models() -> void:
+	var res: Array = await ctx.ollama.collect(ctx.ollama.tags())
+	if not is_instance_valid(self) or not is_inside_tree():
+		return
+	if res[0] and not res[3].is_empty():
+		var ms: Array = []
+		for m in res[3][0].get("models", []):
+			ms.append({"name": str(m.get("name", "")), "size": float(m.get("size", 0))})
+		ms.sort_custom(func(a, b): return a.size < b.size)
+		ctx.models = ms
+		ctx.prefetch_caps()
 
 
 func _finish(id: String) -> void:
