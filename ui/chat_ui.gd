@@ -225,7 +225,7 @@ class CardView extends PanelContainer:
 			set_open(false)
 
 
-## Scène FIXE de l'assistant : sa place (il ne bouge pas quand on fait défiler) + route en perspective « rayons X » qui s'élargit vers le chat.
+## Scène FIXE de l'assistant : salle cryogénique pixel art. Au repos l'assistant dort, figé dans sa capsule givrée (inanimé) ; quand il travaille, la capsule se réchauffe et il se réveille. Les autres assistants restent congelés dans les capsules voisines.
 class Stage extends Control:
 	var ai := 0
 	var mode := "idle":
@@ -235,9 +235,9 @@ class Stage extends Control:
 				t = 0.0
 	var speed := 1.0
 	var t := 0.0
-	var flow := 0.0
+	var wake := 0.0  # 0 = congelé, 1 = réveillé
+	var clock := 0.0
 	var motto := ""
-	const FEET := 0.40
 
 	func _init(a := 0) -> void:
 		ai = a
@@ -248,62 +248,133 @@ class Stage extends Control:
 
 	func _process(d: float) -> void:
 		var a := U.anim_for(mode)
+		clock += d
 		t += d * float(W.Orb.FPS.get(a, 3.0)) * speed * float(U.get_u(ai).anim.speed)
-		flow += d * (0.18 if mode == "idle" else 0.9 * speed)
+		wake = move_toward(wake, 0.0 if mode == "idle" else 1.0, d * 1.2)
 		queue_redraw()
 
+	func _sprite(i: int, a: String, f: int, r: Rect2, mod: Color) -> void:
+		if W.Orb.XANIMS.has(a):
+			draw_texture_rect_region(W.Orb.XSHEET, r, Rect2(f * 32, (i * 4 + W.Orb.XANIMS[a]) * 32, 32, 32), mod)
+		else:
+			var row: int = W.Orb.ANIMS[a][0] + i * 5
+			var n: int = W.Orb.ANIMS[a][1]
+			draw_texture_rect_region(W.Orb.SHEET, r, Rect2((f % n) * 32, row * 32, 32, 32), mod)
+
+	## Une capsule : cadre métal, verre givré, personnage, voyant, tuyaux, bulles. k = réveil (0..1).
+	func _pod(cx: float, fl: float, pw: float, ph: float, i: int, k: float, main: bool) -> void:
+		var col := U.color(i)
+		var top := fl - ph
+		var metal := Color("39424f")
+		var dark := Color("1b212b")
+		# socle + chapeau
+		draw_rect(Rect2(cx - pw * 0.5 - 6, fl - 12, pw + 12, 12), dark)
+		draw_rect(Rect2(cx - pw * 0.5 - 6, fl - 12, pw + 12, 4), metal)
+		draw_rect(Rect2(cx - pw * 0.5 - 6, top, pw + 12, 14), metal)
+		draw_rect(Rect2(cx - pw * 0.5 - 6, top + 10, pw + 12, 4), dark)
+		# voyant : rouge (sommeil) -> vert (éveillé), clignote pendant le réveil
+		var lit := Color("e0483c").lerp(Color("4de1b4"), k)
+		var blink := 1.0 if (k > 0.98 or k < 0.02) else (0.5 + 0.5 * sin(clock * 14.0))
+		draw_rect(Rect2(cx - 4, top + 3, 8, 6), Color(lit, 0.45 + 0.55 * blink))
+		# intérieur
+		var gx := cx - pw * 0.5
+		var gy := top + 14
+		var gh := ph - 26
+		draw_rect(Rect2(gx, gy, pw, gh), Color("0b1520").lerp(Color(col, 0.35), 0.15 + 0.2 * k))
+		# lueur du liquide
+		for j in 5:
+			draw_rect(Rect2(gx, gy + gh * j / 5.0, pw, ceilf(gh / 5.0)), Color(0.45, 0.78, 1.0, 0.05 + 0.025 * j) if k < 1.0 else Color(col, 0.04))
+		# personnage
+		var px := floorf(pw * 0.85 / 4.0) * 4.0
+		var a := U.anim_for(mode) if main else "idle"
+		var f := int(t) % 4 if (main and k > 0.5) else 0
+		var bob := 0.0
+		if main and k > 0.5:
+			bob = -absf(sin(t * 1.3)) * 3.0 * float(U.get_u(ai).anim.bounce) if a == "talk" else 0.0
+		else:
+			bob = roundf(sin(clock * 0.8) * 2.0) if k < 0.5 else 0.0  # flotte, inerte
+		var frozen_tint := Color(0.55, 0.72, 0.95, 1.0)
+		var mod := frozen_tint.lerp(Color.WHITE, k)
+		if not main:
+			mod = frozen_tint.darkened(0.25)
+		var pos := Vector2(floorf(cx - px * 0.5), floorf(fl - 14 - px + 4 + bob))
+		_sprite(i, "idle" if (not main or k < 0.5) else a, f, Rect2(pos, Vector2(px, px)), mod)
+		# bulles
+		var nb := 6 if main else 3
+		for j in nb:
+			var ph2 := fposmod(clock * (0.25 + 0.9 * k) + j * 0.37, 1.0)
+			var bx := gx + 6 + fposmod(j * 53.0, pw - 12)
+			draw_rect(Rect2(floorf(bx), floorf(gy + gh - ph2 * gh), 3, 3), Color(0.8, 0.95, 1.0, 0.55 * (1.0 - ph2)))
+		# givre sur le verre : s'efface au réveil
+		var fr := 1.0 - k
+		if fr > 0.02:
+			draw_rect(Rect2(gx, gy, pw, gh), Color(0.8, 0.93, 1.0, 0.22 * fr))
+			for j in 18:
+				var fx := gx + fposmod(j * 37.0 + 11.0, pw - 6)
+				var fy := gy + fposmod(j * 61.0 + 7.0, gh - 6)
+				draw_rect(Rect2(floorf(fx / 3) * 3, floorf(fy / 3) * 3, 6, 3), Color(1, 1, 1, 0.5 * fr))
+			# givre sur les bords
+			draw_rect(Rect2(gx, gy, pw, 6), Color(0.9, 0.97, 1.0, 0.55 * fr))
+			draw_rect(Rect2(gx, gy + gh - 8, pw, 8), Color(0.9, 0.97, 1.0, 0.5 * fr))
+		# reflet de la vitre
+		draw_rect(Rect2(gx + 6, gy + 6, 4, gh * 0.55), Color(1, 1, 1, 0.12))
+		# montants du cadre
+		draw_rect(Rect2(gx - 6, gy, 6, gh), metal)
+		draw_rect(Rect2(gx + pw, gy, 6, gh), metal)
+		draw_rect(Rect2(gx - 6, gy, 2, gh), Color(1, 1, 1, 0.08))
+		# tuyaux + buée au pied
+		draw_rect(Rect2(gx - 12, fl - 30, 6, 30), dark)
+		draw_rect(Rect2(gx + pw + 6, fl - 30, 6, 30), dark)
+		if k < 0.5:
+			for j in 3:
+				var vp := fposmod(clock * 0.3 + j * 0.33, 1.0)
+				draw_rect(Rect2(gx + 4 + j * pw * 0.3, fl - 2 - vp * 14, 10, 4), Color(0.85, 0.95, 1.0, 0.25 * (1.0 - vp) * (1.0 - k * 2.0)))
+
 	func _draw() -> void:
-		var col := U.color(ai)
+		var col := U.color(i_main())
 		var w := size.x
 		var h := size.y
-		var y0 := floorf(h * FEET)
-		# fond : bandes de ciel pixel
-		for i in 6:
-			draw_rect(Rect2(0, floorf(i * y0 / 6.0), w, ceilf(y0 / 6.0)), T.BG.lerp(col, 0.02 + 0.015 * i))
-		# route : rangées de 4 px, bords droits qui s'élargissent (perspective)
-		var step := 4.0
-		var y := y0
-		while y < h:
-			var tt := (y + step * 0.5 - y0) / maxf(h - y0, 1.0)
-			var hw := lerpf(26.0, w * 0.49, tt)
-			var cx := w * 0.5
-			var depth := 1.0 / (tt + 0.07)
-			var asphalt := T.BG.darkened(0.25).lerp(col, 0.07 + 0.08 * tt)
-			draw_rect(Rect2(cx - hw, y, hw * 2.0, step), asphalt)
-			# rails lumineux
-			draw_rect(Rect2(cx - hw, y, 4.0, step), Color(col, 0.95))
-			draw_rect(Rect2(cx + hw - 4.0, y, 4.0, step), Color(col, 0.95))
-			draw_rect(Rect2(cx - hw + 8.0 + tt * 14.0, y, 2.0, step), Color(col, 0.35))
-			draw_rect(Rect2(cx + hw - 10.0 - tt * 14.0, y, 2.0, step), Color(col, 0.35))
-			# lignes transversales « rayons X » : espacées selon la profondeur, qui avancent vers le chat
-			if fposmod(depth * 1.1 - flow * 3.0, 1.0) < 0.16:
-				draw_rect(Rect2(cx - hw + 4.0, y, hw * 2.0 - 8.0, step * 0.5), Color(col, 0.42))
-			# tirets centraux
-			if fposmod(depth * 0.9 - flow * 2.4, 1.0) < 0.5:
-				var dw := lerpf(3.0, 12.0, tt)
-				draw_rect(Rect2(cx - dw * 0.5, y, dw, step), Color(T.TEXT, 0.55))
-			y += step
-		# halo de l'horizon
-		draw_rect(Rect2(0, y0 - 2.0, w, 2.0), Color(col, 0.55))
-		# piédestal + mascotte (taille ×3), centrée
-		var px := 96
-		var cx2 := floorf(w * 0.5)
-		KPx.panel(self, Rect2(cx2 - 54, y0 - 6.0, 108, 14), col.darkened(0.55), col.darkened(0.8), true, 1)
-		var f := int(t) % 4
-		var a := U.anim_for(mode)
-		var bounce := -absf(sin(t * 1.3)) * 3.0 * float(U.get_u(ai).anim.bounce) if a == "talk" else 0.0
-		var pos := (Vector2(cx2 - px * 0.5, y0 - px + 4.0 + bounce)).round()
-		if W.Orb.XANIMS.has(a):
-			draw_texture_rect_region(W.Orb.XSHEET, Rect2(pos, Vector2(px, px)), Rect2(f * 32, (ai * 4 + W.Orb.XANIMS[a]) * 32, 32, 32))
-		else:
-			var row: int = W.Orb.ANIMS[a][0] + ai * 5
-			var n: int = W.Orb.ANIMS[a][1]
-			draw_texture_rect_region(W.Orb.SHEET, Rect2(pos, Vector2(px, px)), Rect2((int(t) % n) * 32, row * 32, 32, 32))
-		# étiquette
+		var fl := h - 18.0
+		# mur du fond : panneaux métal
+		draw_rect(Rect2(0, 0, w, h), T.BG.darkened(0.3))
+		for j in 8:
+			draw_rect(Rect2(floorf(j * w / 8.0), 0, 2, fl), Color(1, 1, 1, 0.035))
+		draw_rect(Rect2(0, floorf(fl * 0.28), w, 2), Color(1, 1, 1, 0.04))
+		# sol quadrillé
+		draw_rect(Rect2(0, fl, w, h - fl), Color("141a23"))
+		draw_rect(Rect2(0, fl, w, 2), Color(0.5, 0.8, 1.0, 0.18 + 0.3 * wake))
+		for j in int(w / 24.0) + 1:
+			draw_rect(Rect2(j * 24.0, fl + 2, 2, h - fl), Color(1, 1, 1, 0.04))
+		# lumière d'ambiance : bleue glacée au repos, couleur de l'assistant éveillé
+		var amb := Color(0.5, 0.75, 1.0).lerp(col, wake)
+		draw_rect(Rect2(0, 0, w, fl), Color(amb, 0.05 + 0.05 * wake))
+		var cx := floorf(w * 0.5)
+		# capsules voisines : les autres assistants, congelés
+		var others: Array = []
+		for j in U.ALL.size():
+			if j != ai:
+				others.append(j)
+		var slots := [-1, 1, -2, 2]
+		for si in slots.size():
+			var o: int = slots[si]
+			var x := cx + signf(float(o)) * (150.0 + (absf(o) - 1.0) * 96.0)
+			if x - 48 < 0 or x + 48 > w or si >= others.size():
+				continue
+			_pod(x, fl, 72, 142, others[si], 0.0, false)
+		# capsule principale
+		_pod(cx, fl, 116, 204, ai, wake, true)
+		# étiquette (écran à côté de la capsule)
 		var font := get_theme_default_font()
 		var nm: String = str(U.get_u(ai).name).to_upper()
-		draw_string(font, Vector2(cx2 + 60, y0 - 52), nm, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, col)
-		draw_string(font, Vector2(cx2 + 60, y0 - 34), str(U.get_u(ai).specialty), HORIZONTAL_ALIGNMENT_LEFT, maxf(w - cx2 - 70, 40.0), 12, T.DIM)
+		var lx := cx + 82
+		if lx + 60 < w:
+			var st := "SOMMEIL CRYO" if wake < 0.5 else "ÉVEILLÉ"
+			draw_string(font, Vector2(lx, fl - 120), nm, HORIZONTAL_ALIGNMENT_LEFT, w - lx - 6, 18, Color(0.7, 0.88, 1.0).lerp(col, wake))
+			draw_string(font, Vector2(lx, fl - 102), str(U.get_u(ai).specialty), HORIZONTAL_ALIGNMENT_LEFT, w - lx - 6, 12, T.DIM)
+			draw_string(font, Vector2(lx, fl - 86), st, HORIZONTAL_ALIGNMENT_LEFT, w - lx - 6, 11, Color("e0483c").lerp(Color("4de1b4"), wake))
+
+	func i_main() -> int:
+		return ai
 
 
 ## Tableau pixel art (panneau d'affichage en bois) des réponses toutes faites.
