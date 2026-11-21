@@ -150,13 +150,13 @@ func build() -> void:
 	qv.add_theme_constant_override("separation", 12)
 	qh.add_child(qv)
 	W.label("Launcher sur téléphone", 18, T.TEXT, qv)
-	W.label("Scanne le code pour installer l'APK Android.", 14, T.DIM, qv)
+	W.label("Scanne le code ou télécharge l'APK Android.", 14, T.DIM, qv)
 	var phb := W.Btn.new("Télécharger l'APK", "primary")
 	phb.icon = "android"
 	phb.tooltip_text = "Ouvrir le lien de l'APK"
-	phb.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	phb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	phb.pressed.connect(func(): OS.shell_open(APK_URL))
-	qv.add_child(phb)
+	cq.add_child(phb)
 
 	var c4 := W.card(body, 8)
 	var row := W.Row.new()
