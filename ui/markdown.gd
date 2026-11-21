@@ -55,7 +55,15 @@ static func _fmt(t: String, accent: String) -> String:
 	t = r.sub(t, "[u]$1[/u]", true)
 	# Définition d'un mot au survol : {{mot|définition}}
 	r.compile("\\{\\{([^|{}]+)\\|([^{}]+)\\}\\}")
-	t = r.sub(t, "[hint=$2][color=#%s][u]$1[/u][/color][/hint]" % accent, true)
+	var hits := r.search_all(t)
+	for i in range(hits.size() - 1, -1, -1):  # de la fin au début pour garder les positions
+		var m := hits[i]
+		# l'infobulle ne doit contenir aucun crochet/égal (sinon le BBCode casse et tout le reste disparaît)
+		var tip := m.get_string(2).replace("[lb]", "").replace("[rb]", "").replace("[", "").replace("]", "")
+		tip = tip.replace("=", " ").replace("\n", " ").strip_edges().left(90)
+		var word := m.get_string(1).strip_edges()
+		var rep := "[hint=%s][color=#%s][u]%s[/u][/color][/hint]" % [tip, accent, word] if tip != "" else word
+		t = t.substr(0, m.get_start()) + rep + t.substr(m.get_end())
 	r.compile("(?<![\\*\\w])\\*(?![\\s\\*])(.+?)(?<![\\s\\*])\\*(?![\\*\\w])")
 	t = r.sub(t, "[i]$1[/i]", true)
 	r.compile("(?<![\\w])_(?![\\s_])(.+?)(?<![\\s_])_(?![\\w])")
