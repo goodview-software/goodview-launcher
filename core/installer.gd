@@ -130,7 +130,10 @@ func _download(url: String, file: String) -> String:
 	_req.timeout = 60.0
 	add_child(_req)
 	var out := [-1, 0]
-	_req.request_completed.connect(func(r: int, c: int, _h: PackedStringArray, _b: PackedByteArray): out = [r, c])
+	# modification en place : une lambda GDScript ne propage pas une réaffectation de `out`
+	_req.request_completed.connect(func(r: int, c: int, _h: PackedStringArray, _b: PackedByteArray):
+		out[0] = r
+		out[1] = c)
 	if _req.request(url, PackedStringArray(["User-Agent: goodview-launcher"])) != OK:
 		_req.queue_free()
 		_req = null

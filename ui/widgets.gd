@@ -12,7 +12,8 @@ static func label(text: String, size: int, color: Color, parent: Control = null)
 	l.text = text
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
-	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	# dans une ligne (HBox) un texte qui passe à la ligne se réduit à 1 lettre de large : on le garde sur une ligne
+	l.autowrap_mode = TextServer.AUTOWRAP_OFF if parent is HBoxContainer else TextServer.AUTOWRAP_WORD_SMART
 	if parent != null:
 		parent.add_child(l)
 	return l

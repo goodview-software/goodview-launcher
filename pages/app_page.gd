@@ -217,6 +217,7 @@ func _kv(parent: Control, key: String, value: String) -> void:
 	var v := W.label(value, 15, T.TEXT, h)
 	v.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
 
 ## Bandeau de chiffres clés : version · taille · date · plateformes.

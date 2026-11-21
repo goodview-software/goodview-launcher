@@ -113,7 +113,9 @@ func download() -> void:
 	req.timeout = 60.0
 	add_child(req)
 	var out := [-1, 0]
-	req.request_completed.connect(func(r: int, c: int, _h: PackedStringArray, _b: PackedByteArray): out = [r, c])
+	req.request_completed.connect(func(r: int, c: int, _h: PackedStringArray, _b: PackedByteArray):
+		out[0] = r
+		out[1] = c)
 	if req.request(str(info["pck"]), PackedStringArray(["User-Agent: goodview-launcher"])) != OK:
 		out = [1, 0]
 	while out[0] == -1:
