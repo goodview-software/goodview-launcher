@@ -33,6 +33,7 @@ class Orb extends Control:
 	const ANIMS := {"idle": [0, 4], "happy": [1, 4], "wait": [2, 4], "off": [3, 4], "sad": [4, 4]}
 	const FPS := {"idle": 3.0, "happy": 6.0, "wait": 3.0, "off": 1.5, "sad": 2.0}
 	var color := Color("5b6573")
+	var variant := 0
 	var level := 0.0
 	var pulse := 0.0
 	var t := 0.0
@@ -57,7 +58,7 @@ class Orb extends Control:
 			var rr := r + 8.0 * (i + 1) + level * 14.0 + sin(pulse + i) * 2.0
 			draw_circle(c, rr, Color(color, 0.11 - i * 0.025))
 		draw_circle(c, r, Color(color, 0.16))
-		var row: int = ANIMS[anim][0]
+		var row: int = ANIMS[anim][0] + variant * 5
 		var n: int = ANIMS[anim][1]
 		var sc := maxi(1, int(size.y * 0.72 / 32.0))
 		var px := 32 * sc
@@ -310,6 +311,7 @@ func _ready() -> void:
 
 func _process(_d: float) -> void:
 	orb.anim = home_anim
+	orb.variant = avatar_id
 	orb.color = orb.color.lerp({"wait": C_WARN, "idle": C_OK, "happy": C_OK, "off": Color("5b6573"),
 			"sad": Color("ff6b6b")}[home_anim], 0.1)
 
@@ -1138,7 +1140,18 @@ func _load_state() -> void:
 		pseudo = str(cfg.get_value("profile", "pseudo", ""))
 
 
+## Profil partagé avec toutes les apps Goodview (mascotte + pseudo) : ~/.config/goodview/profile.json
+func _write_shared_profile() -> void:
+	var dir := OS.get_environment("HOME") + "/.config/goodview"
+	DirAccess.make_dir_recursive_absolute(dir)
+	var f := FileAccess.open(dir + "/profile.json", FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify({"pseudo": pseudo, "mascot": avatar_id}))
+		f.close()
+
+
 func _save_state() -> void:
+	_write_shared_profile()
 	var f := FileAccess.open(STATE_FILE, FileAccess.WRITE)
 	f.store_string(JSON.stringify(installed))
 	f.close()
