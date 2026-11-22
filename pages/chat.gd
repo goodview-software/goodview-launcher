@@ -100,6 +100,19 @@ func build() -> void:
 	stage.picked.connect(switch_assistant)
 	sc.add_child(stage)
 	_chrome.append(sc)
+	# la scène cède la place au chat (et à la saisie) quand l'écran est petit ou zoomé
+	var fit := func():
+		if is_instance_valid(stage) and is_instance_valid(sc) and is_instance_valid(scroll) and size.y > 0.0:
+			var others := 0.0
+			for c in _outer.get_children():
+				if c is Control and c != sc and c != scroll:
+					others += c.get_combined_minimum_size().y
+			# on garde au moins ~150 px pour la liste des messages ; la scène s'efface si besoin
+			var h := clampf(size.y - others - 150.0, 0.0, 290.0)
+			sc.visible = h >= 60.0
+			stage.custom_minimum_size.y = maxf(h, 60.0)
+	resized.connect(fit)
+	fit.call_deferred()
 	# messages
 	msgs = VBoxContainer.new()
 	msgs.add_theme_constant_override("separation", 16)

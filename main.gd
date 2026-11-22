@@ -34,6 +34,7 @@ func _ready() -> void:
 	add_child(router)
 	router.page_changed.connect(_on_page)
 	_restore_window()
+	get_window().content_scale_factor = float(ctx.store.get_s("ui", "scale", 1.0))
 	router.push(("board" if ctx.start_page() == "chat" else ctx.start_page()) if ctx.store.welcomed else "welcome")
 	ctx.start()
 	Pixelize.install(self)
@@ -47,6 +48,13 @@ func _on_page(page_title: String) -> void:
 
 func _unhandled_input(e: InputEvent) -> void:
 	if router == null:
+		return
+	if e is InputEventKey and e.pressed and e.ctrl_pressed and e.keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD, KEY_MINUS, KEY_KP_SUBTRACT]:
+		var up: bool = e.keycode in [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD]
+		var z := clampf(snappedf(get_window().content_scale_factor + (0.25 if up else -0.25), 0.25), 1.0, 2.5)
+		get_window().content_scale_factor = z
+		ctx.store.set_s("ui", "scale", z)
+		get_viewport().set_input_as_handled()
 		return
 	if e.is_action_pressed("ui_cancel") or (e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_XBUTTON1):
 		if router.back():

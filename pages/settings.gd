@@ -24,6 +24,15 @@ func build() -> void:
 	sg.changed.connect(func(id: String): ctx.store.set_s("ui", "start", id))
 	r0.add_child(sg)
 	W.hsep(c0)
+	W.label("Taille de l'interface, en % (Ctrl + / Ctrl -)", 15, T.TEXT, c0)
+	var sz := W.Seg.new([["1.0", "100"], ["1.25", "125"], ["1.5", "150"], ["2.0", "200"], ["2.5", "250"]], str(float(ctx.store.get_s("ui", "scale", 1.0))))
+	sz.custom_minimum_size = Vector2(0, 38)
+	sz.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	sz.changed.connect(func(id: String):
+		ctx.store.set_s("ui", "scale", float(id))
+		get_window().content_scale_factor = float(id))
+	c0.add_child(sz)
+	W.hsep(c0)
 	var r00 := W.setting_row(c0, "Les assistants peuvent s'appeler", "Goody et les experts se posent des questions entre eux")
 	var tg0 := W.Toggle.new()
 	tg0.set_on(ctx.orchestra.allow)
