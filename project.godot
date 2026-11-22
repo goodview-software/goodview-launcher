@@ -6,6 +6,7 @@ config/description="Bundle logiciel Goodview : télécharge, met à jour et lanc
 run/main_scene="res://boot.tscn"
 config/icon="res://icon.svg"
 config/features=PackedStringArray("4.7")
+run/low_processor_mode=true
 
 [display]
 window/size/viewport_width=1100

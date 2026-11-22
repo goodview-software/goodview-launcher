@@ -250,9 +250,7 @@ func _render_list() -> void:
 	if n == 0:
 		match cat.state:
 			"loading":
-				var g := _grid()
-				for i in 4:
-					g.add_child(AppCard.Ghost.new(i))
+				_list.add_child(preload("res://ui/cube_loader.gd").new())
 			"offline":
 				_state_view("sad", "Hors ligne", "Vérifie ta connexion Internet, puis réessaie.", true)
 			"error":

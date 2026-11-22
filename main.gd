@@ -7,6 +7,7 @@ const Router := preload("res://ui/router.gd")
 const T := preload("res://ui/theme.gd")
 const Tk := preload("res://kit/tokens.gd")
 const Pixelize := preload("res://kit/pixelize.gd")
+const Single := preload("res://kit/single.gd")
 const APP_TITLE := "Goodview Launcher"
 
 var ctx: Ctx
@@ -22,6 +23,8 @@ func _ready() -> void:
 		var runner: Node = load("res://test_run.gd").new()
 		add_child(runner)
 		runner.run(self)
+		return
+	if not Single.claim(self, "goodview-launcher"):  # déjà ouvert : on ne double pas
 		return
 	get_window().title = APP_TITLE
 	get_window().min_size = Vector2i(360, 520)

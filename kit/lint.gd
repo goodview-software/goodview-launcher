@@ -223,3 +223,26 @@ static func sweep(host: Control, root: Control, widths: Array, tree: SceneTree, 
 			await tree.process_frame
 		out.append_array(scan(root, "%s @%d" % [ctx, w]))
 	return out
+
+
+## Couleurs en dur (`Color("#…")`, `Color(0.1, …)`) dans les scripts de `dirs`, hors fichiers de `allow` (sous-chaînes de chemin).
+## Les jetons (`T.`, `Tk.`) et `Color(str(x))` ne comptent pas. Renvoie une liste « fichier:ligne ».
+static func hardcoded_colors(dirs: Array, allow: Array) -> Array:
+	var out := []
+	var rx := RegEx.create_from_string("Color\\(\\s*(\"|[0-9.]+\\s*,)")
+	var stack: Array = dirs.duplicate()
+	while not stack.is_empty():
+		var d: String = stack.pop_back()
+		for sub in DirAccess.get_directories_at(d):
+			if not sub.begins_with("."):
+				stack.append(d + "/" + sub)
+		for f in DirAccess.get_files_at(d):
+			var p: String = d + "/" + f
+			if not f.ends_with(".gd") or allow.any(func(a): return p.contains(a)):
+				continue
+			var n := 0
+			for line in FileAccess.get_file_as_string(p).split("\n"):
+				n += 1
+				if rx.search(line) != null and not line.strip_edges().begins_with("#"):
+					out.append("%s:%d" % [p, n])
+	return out

@@ -101,6 +101,8 @@ func run(host: Node) -> void:
 	check(ctx.updates().size() == 2, "2 mises à jour détectées")
 	check(ctx.has_updates(), "badge de mise à jour")
 	check(router.nav.badge, "badge de mise à jour sur l'onglet Apps")
+	var hard: Array = load("res://kit/lint.gd").hardcoded_colors(["res://pages", "res://ui", "res://core"], ["ui/theme.gd", "ui/widgets.gd", "ui/corner_box.gd", "ui/icons.gd"])
+	check(hard.is_empty(), "pas de couleur en dur hors thème/HUD : " + ", ".join(hard.slice(0, 5)))
 	check(ctx.installer.running() is Dictionary, "installer.running() lisible (anti-doublon au lancement)")
 	for mode in ["recent", "az", "updates"]:
 		home.sort_mode = mode
