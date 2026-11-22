@@ -56,6 +56,10 @@ var entries: Array = []  # [{name, icon, update}]
 var _sig := ""
 
 
+func _init() -> void:
+	visible = false  # force_native ne se change que fenêtre cachée ; affichée en fin de _ready
+
+
 func _ready() -> void:
 	title = "Goodview HUD"
 	borderless = true
