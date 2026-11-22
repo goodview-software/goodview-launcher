@@ -272,9 +272,12 @@ func _render_list() -> void:
 	_sync_cats()
 	var apps := _visible_apps()
 	if apps.is_empty():
-		_state_view("off", "Aucun résultat", "Essaie un autre mot.", false)
+		if query == "" and cat_filter != "all":
+			_state_view("off", "Bientôt", "Aucune app %s pour l'instant." % Catalog.category_label(cat_filter), false)
+		else:
+			_state_view("off", "Aucun résultat", "Essaie un autre mot.", false)
 		return
-	if cat_filter != "all" or not _cats.visible:
+	if cat_filter != "all":
 		var g2 := _grid()
 		for a in apps:
 			g2.add_child(_card(a))
@@ -282,22 +285,20 @@ func _render_list() -> void:
 	# « Tout » : une section par catégorie, comme une boutique
 	for c in Catalog.CATEGORIES:
 		var sec: Array = apps.filter(func(a): return Catalog.category(a) == c[0])
-		if sec.is_empty():
-			continue
 		W.label(c[1], 20, T.TEXT, _list)
+		if sec.is_empty():
+			if query == "":
+				W.label("Bientôt", 14, T.DIM, _list)
+			continue
 		var g3 := _grid()
 		for a in sec:
 			g3.add_child(_card(a))
 
 
-## Puces de catégories : seulement celles qui contiennent des apps ; masquées s'il n'y en a qu'une.
+## Puces de catégories : toujours toutes affichées (Tout + chaque catégorie), même vides.
 func _sync_cats() -> void:
-	var present: Array = []
-	for c in Catalog.CATEGORIES:
-		if ctx.catalog.apps.any(func(a): return Catalog.category(a) == c[0]):
-			present.append(c)
-	_cats.visible = present.size() > 1
-	var opts: Array = [["all", "Tout"]] + present
+	_cats.visible = true
+	var opts: Array = [["all", "Tout"]] + Catalog.CATEGORIES
 	if not opts.any(func(o): return o[0] == cat_filter):
 		cat_filter = "all"
 	_cats.value = cat_filter
