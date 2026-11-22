@@ -1,14 +1,11 @@
 extends "res://kit/ui/k_card.gd"
-## Carte d'app de la grille : grande icône, nom, accroche, pastille d'état, étoile favori, bouton « Voir l'app ».
+## Carte d'app de la grille : une ligne sobre (icône, nom, accroche, état).
 ## Toute la carte est cliquable (survol / pression uniformes, composant KCard interactif).
 
 signal fav_toggled
 
-var btn_text := "Voir l'app"
-
 const T := preload("res://ui/theme.gd")
 const W := preload("res://ui/widgets.gd")
-const Btn_ := preload("res://kit/ui/k_button.gd")
 
 
 func _init() -> void:
@@ -18,41 +15,38 @@ func _init() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 
-## Remplit la carte. icon : Control (AppIcon) déjà créé ; status : [texte, couleur].
+## Remplit la carte : une ligne (icône, nom + accroche, état). Étoile seulement pour un favori.
 func setup(icon: Control, title: String, tagline: String, status: Array, fav: bool, show_star := true) -> void:
-	var v := KS.vbox(self, Tokens.S2)
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", Tokens.S3)
+	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(h)
+	icon.custom_minimum_size = Vector2(56, 56)
+	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	h.add_child(icon)
+	var v := KS.vbox(h, 0)
 	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var top := HBoxContainer.new()
-	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	v.add_child(top)
-	KS.spacer(top)
-	if show_star:
-		var st := W.IconBtn.new("star_on" if fav else "star", 44)
-		st.tooltip_text = "Retirer des favoris" if fav else "Ajouter aux favoris"
-		st.pressed.connect(func(): fav_toggled.emit())
-		top.add_child(st)
-	else:
-		top.custom_minimum_size = Vector2(0, 44)
-	icon.custom_minimum_size = Vector2(0, 88)
-	icon.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	v.add_child(icon)
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var nm := KS.label(v, title, Tokens.FS_LG, null, 600, true)
-	nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	nm.max_lines_visible = 2
+	nm.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	nm.set_meta("k_ellipsis", true)
 	var tl := KS.label(v, tagline, Tokens.FS_SM, Tokens.text_muted, 400, true)
-	tl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	tl.max_lines_visible = 2
 	tl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	tl.set_meta("k_ellipsis", true)
-	KS.spacer(v, false).size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var pr := HBoxContainer.new()
-	pr.alignment = BoxContainer.ALIGNMENT_CENTER
 	pr.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	v.add_child(pr)
+	pr.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	h.add_child(pr)
+	if fav and show_star:
+		var st := W.IconBtn.new("star_on", 36)
+		st.col = T.WARN
+		st.tooltip_text = "Retirer des favoris"
+		st.pressed.connect(func(): fav_toggled.emit())
+		pr.add_child(st)
 	W.pill(pr, status[0], status[1])
-	var b := Btn_.make(btn_text, "primary", "md")
-	b.size_flags_horizontal = Control.SIZE_FILL
-	b.pressed.connect(func(): pressed.emit())
-	v.add_child(b)
 
 
 ## Carte fantôme pour l'état de chargement.
