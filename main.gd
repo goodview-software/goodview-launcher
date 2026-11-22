@@ -47,6 +47,7 @@ func _ready() -> void:
 	Pixelize.install(self)
 	_add_corner_box()
 	_add_splash()
+	_sync_idle_rate.call_deferred()
 	if OS.get_environment("GL_PAGE") != "":  # débogage : ouvre directement une page d'onglet
 		router.go_tab(OS.get_environment("GL_PAGE"))
 
@@ -69,6 +70,13 @@ func _add_splash() -> void:
 	tw.tween_interval(0.35)
 	tw.tween_property(bg, "modulate:a", 0.0, 0.3)
 	tw.tween_callback(bg.queue_free)
+
+
+## Cadence réduite quand la fenêtre n'a pas le focus (jeu au premier plan) : le launcher/overlay ne doit presque rien coûter.
+func _sync_idle_rate() -> void:
+	await get_tree().create_timer(1.0).timeout
+	if is_inside_tree():
+		OS.low_processor_usage_mode_sleep_usec = 16600 if get_window().has_focus() else 100000
 
 
 func _add_corner_box() -> void:
@@ -104,6 +112,10 @@ func _notification(what: int) -> void:
 		NOTIFICATION_WM_GO_BACK_REQUEST:  # bouton Retour d'Android
 			if router != null:
 				router.back()
+		NOTIFICATION_APPLICATION_FOCUS_IN:
+			OS.low_processor_usage_mode_sleep_usec = 16600  # 60 i/s quand on s'en sert
+		NOTIFICATION_APPLICATION_FOCUS_OUT:
+			OS.low_processor_usage_mode_sleep_usec = 100000  # en arrière-plan (jeu au premier plan) : ~10 i/s, CPU quasi nul
 		NOTIFICATION_WM_CLOSE_REQUEST:
 			if ctx == null:
 				get_tree().quit()
@@ -112,6 +124,7 @@ func _notification(what: int) -> void:
 			if ctx.quitting or not ctx.background_enabled() or not _has_overlay():
 				get_tree().quit()
 			else:
+				OS.low_processor_usage_mode_sleep_usec = 100000
 				get_window().hide()  # reste vivant : l'overlay continue de gérer les apps
 
 
@@ -120,6 +133,7 @@ func _has_overlay() -> bool:
 
 
 func _show_window() -> void:
+	OS.low_processor_usage_mode_sleep_usec = 16600
 	var w := get_window()
 	w.show()
 	if w.mode == Window.MODE_MINIMIZED:

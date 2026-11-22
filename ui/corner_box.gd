@@ -83,6 +83,13 @@ func _ready() -> void:
 	t.wait_time = 1.5
 	t.autostart = true
 	t.timeout.connect(func():
+		_tick_n += 1
+		if _tick_n % 2 == 0:  # toutes les 3 s : un jeu plein écran au premier plan -> overlay masqué (aucun coût pour le jeu)
+			var fs := _fullscreen_active()
+			if fs == visible:
+				visible = not fs
+		if not visible:
+			return
 		_collect()
 		_slot_t += 1.5
 		if _slot_t > 1.5:
@@ -90,6 +97,33 @@ func _ready() -> void:
 	add_child(t)
 	_collect()
 	visible = true
+
+
+var _tick_n := 0
+
+
+## Une fenêtre plein écran (jeu) a-t-elle le focus ? xprop sur l'hôte (flatpak-spawn), sinon en direct ; faux si indisponible.
+func _fullscreen_active() -> bool:
+	if DisplayServer.get_name() != "X11":
+		return false
+	var cmds: Array = [["flatpak-spawn", "--host", "xprop"], ["xprop"]]
+	for c in cmds:
+		var o := []
+		var args: Array = c.slice(1) + ["-root", "_NET_ACTIVE_WINDOW"] if c.size() > 1 else ["-root", "_NET_ACTIVE_WINDOW"]
+		if OS.execute(c[0], PackedStringArray(args), o) != 0 or o.is_empty():
+			continue
+		var id := ""
+		for part in str(o[0]).split(" "):
+			if part.strip_edges().begins_with("0x"):
+				id = part.strip_edges()
+		if id == "" or id == "0x0":
+			return false
+		var o2 := []
+		var args2: Array = c.slice(1) + ["-id", id, "_NET_WM_STATE"] if c.size() > 1 else ["-id", id, "_NET_WM_STATE"]
+		if OS.execute(c[0], PackedStringArray(args2), o2) != 0 or o2.is_empty():
+			return false
+		return "_NET_WM_STATE_FULLSCREEN" in str(o2[0])
+	return false
 
 
 func _collect() -> void:

@@ -7,6 +7,7 @@ run/main_scene="res://boot.tscn"
 config/icon="res://icon.svg"
 config/features=PackedStringArray("4.7")
 run/low_processor_mode=true
+run/low_processor_mode_sleep_usec=16600
 
 [display]
 window/size/viewport_width=1100
