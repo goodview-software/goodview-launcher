@@ -20,6 +20,8 @@ var locked := false
 var mode := ""  # "", pan, marquee, move, resize, rotate, endpoint, draw, poly, erase, label
 var hover := ""
 var bind_hover := ""
+var edge_sel := ""  # id du nœud enfant dont le lien vers son parent est sélectionné
+var wire := {}  # fil en cours depuis un port de nœud de chat : {id, out, pos}
 var guides: Array = []
 var marquee := Rect2()
 var erase_set := {}
@@ -344,6 +346,9 @@ func motion(cp: Vector2, e: InputEventMouseMotion) -> void:
 			_do_rotate(wp, e)
 		"endpoint":
 			_do_endpoint(wp, e)
+		"wire":
+			wire["pos"] = wp
+			S.overlay.queue_redraw()
 		"draw":
 			_do_draw(wp, e)
 		"poly":
@@ -383,6 +388,8 @@ func release(cp: Vector2, e: InputEventMouseButton) -> void:
 			sc.commit()
 			sc.touch()
 			S.sel_changed.emit()
+		"wire":
+			_end_wire(S.c2w(cp))
 		"endpoint":
 			mode = ""
 			bind_hover = ""
@@ -410,10 +417,77 @@ func release(cp: Vector2, e: InputEventMouseButton) -> void:
 
 # ------------------------------------------------------------------ sélection
 
+## Ports d'un nœud de chat (survolé ou sélectionné) : entrée en haut (parent), sortie en bas (enfants).
+func port_at(wp: Vector2) -> Dictionary:
+	var tol: float = 9.0 / S.zoom
+	var ids := {}
+	if hover != "":
+		ids[hover] = true
+	for id in sc.sel:
+		ids[id] = true
+	for id in ids:
+		var m: Dictionary = sc.get_el(str(id))
+		if m.is_empty() or (m.type != "msg" and m.type != "image"):
+			continue
+		var r := Geom.rect(m)
+		if m.type == "image":
+			if wp.distance_to(Vector2(r.get_center().x, r.end.y)) <= tol:
+				return {"id": str(id), "out": true}
+			continue
+		if wp.distance_to(Vector2(r.get_center().x, r.position.y)) <= tol:
+			return {"id": str(id), "out": false}
+		if wp.distance_to(Vector2(r.get_center().x, r.end.y)) <= tol:
+			return {"id": str(id), "out": true}
+	return {}
+
+
+## Coupe le lien d'un nœud avec son parent : le nœud (et sa sous-branche) devient une racine, rien n'est supprimé.
+func cut_edge(child_id: String) -> void:
+	if child_id.begins_with("img:"):
+		var m: Dictionary = sc.get_el(child_id.substr(4))
+		m["img"] = ""
+		sc.mark(m)
+		sc.commit()
+		S.host.touch()
+	elif Chat.reparent(sc, child_id, ""):
+		sc.commit()
+		S.host.touch()
+	edge_sel = ""
+	S.redraw()
+
+
+func _end_wire(wp: Vector2) -> void:
+	var w := wire
+	wire = {}
+	mode = ""
+	var tgt := top_hit(wp)
+	var tid := str(tgt.id) if not tgt.is_empty() and tgt.type == "msg" else ""
+	var changed := false
+	if sc.get_el(str(w.id)).get("type", "") == "image":
+		if tid != "":
+			sc.get_el(tid)["img"] = str(w.id)  # image connectée au nœud
+			sc.mark(tid)
+			changed = true
+	elif tid != "" and tid != str(w.id):
+		changed = Chat.reparent(sc, tid, str(w.id)) if w.out else Chat.reparent(sc, str(w.id), tid)
+	elif tid == "" and not w.out:
+		changed = Chat.reparent(sc, str(w.id), "")  # fil lâché dans le vide : le lien est coupé
+	if changed:
+		sc.commit()
+		S.host.touch()
+	S.redraw()
+
+
 func _press_select(cp: Vector2, e: InputEventMouseButton) -> void:
 	var hh := handle_at(cp)
 	if hh != "":
 		_begin_handle(hh)
+		return
+	var pt := port_at(_p0)
+	if not pt.is_empty():
+		wire = {"id": pt.id, "out": pt.out, "pos": _p0}
+		mode = "wire"
+		edge_sel = ""
 		return
 	var lh := label_hit(_p0)
 	if not lh.is_empty() and not e.double_click:
@@ -422,6 +496,15 @@ func _press_select(cp: Vector2, e: InputEventMouseButton) -> void:
 		sc.select([lh.id])
 		return
 	var el := top_hit(_p0)
+	if el.is_empty() and not e.double_click:
+		var eid := Chat.edge_at(sc, _p0, 7.0 / S.zoom)
+		if eid != "":
+			edge_sel = eid
+			sc.clear_sel()
+			S.sel_changed.emit()
+			S.redraw()
+			return
+	edge_sel = ""
 	if e.double_click:
 		_dbl(el)
 		return

@@ -536,6 +536,7 @@ func _sanitize(el: Dictionary) -> void:
 		el["role"] = "assistant" if str(el.get("role", "user")) == "assistant" else "user"
 		el["text"] = str(el.get("text", ""))
 		el["parent"] = str(el.get("parent", ""))
+		el["img"] = str(el.get("img", ""))
 		el["ai"] = int(el.get("ai", 0))
 		el["model"] = str(el.get("model", ""))
 		el["kind"] = "note"

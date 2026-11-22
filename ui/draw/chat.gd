@@ -39,6 +39,85 @@ static func parent_of(sc, el: Dictionary) -> Dictionary:
 	return p if is_msg(p) else {}
 
 
+## Points (monde) de la courbe parent -> enfant : 17 points de Bézier.
+static func edge_pts(par: Dictionary, el: Dictionary) -> PackedVector2Array:
+	var a := Geom.rect(par)
+	var b := Geom.rect(el)
+	var p0: Vector2
+	var p1: Vector2
+	var d: Vector2
+	if b.position.y >= a.end.y - 4.0:
+		p0 = Vector2(a.get_center().x, a.end.y)
+		p1 = Vector2(b.get_center().x, b.position.y)
+		d = Vector2(0, 1)
+	elif b.position.x >= a.end.x - 4.0:
+		p0 = Vector2(a.end.x, a.get_center().y)
+		p1 = Vector2(b.position.x, b.get_center().y)
+		d = Vector2(1, 0)
+	elif b.end.x <= a.position.x + 4.0:
+		p0 = Vector2(a.position.x, a.get_center().y)
+		p1 = Vector2(b.end.x, b.get_center().y)
+		d = Vector2(-1, 0)
+	else:
+		p0 = Vector2(a.get_center().x, a.end.y)
+		p1 = Vector2(b.get_center().x, b.position.y)
+		d = Vector2(0, 1)
+	var k := clampf(p0.distance_to(p1) * 0.45, 16.0, 140.0)
+	var c1 := p0 + d * k
+	var c2 := p1 - d * k
+	var pts := PackedVector2Array()
+	for i in 17:
+		pts.append(Geom.bez(p0, c1, c2, p1, i / 16.0))
+	return pts
+
+
+## Points d'un lien image -> nœud (droit, bas de l'image vers le haut du nœud). Vide si l'image n'existe plus.
+static func img_edge(sc, m: Dictionary) -> PackedVector2Array:
+	var im: Dictionary = sc.get_el(str(m.get("img", "")))
+	if im.is_empty() or im.type != "image":
+		return PackedVector2Array()
+	var a := Geom.rect(im)
+	var b := Geom.rect(m)
+	return PackedVector2Array([Vector2(a.get_center().x, a.end.y), Vector2(b.get_center().x, b.position.y)])
+
+
+## Id du nœud enfant dont le lien vers son parent passe près de wp (monde), sinon "".
+static func edge_at(sc, wp: Vector2, tol: float) -> String:
+	for m in sc.msgs():
+		var par: Dictionary = parent_of(sc, m)
+		if par.is_empty():
+			continue
+		var pts := edge_pts(par, m)
+		for i in 16:
+			if Geometry2D.get_closest_point_to_segment(wp, pts[i], pts[i + 1]).distance_to(wp) <= tol:
+				return str(m.id)
+	for m in sc.msgs():
+		var ip := img_edge(sc, m)
+		if ip.size() == 2 and Geometry2D.get_closest_point_to_segment(wp, ip[0], ip[1]).distance_to(wp) <= tol:
+			return "img:" + str(m.id)
+	return ""
+
+
+## Place le nœud child_id (et sa sous-branche) sous new_parent_id ("" = le détache, il devient une racine). Faux si cycle.
+static func reparent(sc, child_id: String, new_parent_id: String) -> bool:
+	var ch: Dictionary = sc.get_el(child_id)
+	if not is_msg(ch) or child_id == new_parent_id:
+		return false
+	if new_parent_id != "":
+		if not is_msg(sc.get_el(new_parent_id)):
+			return false
+		for n in path(sc, new_parent_id):  # new_parent est-il dans la sous-branche de child ? alors cycle
+			if str(n.id) == child_id:
+				return false
+	if str(ch.get("parent", "")) == new_parent_id:
+		return false
+	ch["parent"] = new_parent_id
+	sc._struct_changed()
+	sc.mark(ch)
+	sc.touch()
+	return true
+
+
 ## Chemin racine -> nœud (le nœud inclus), à l'abri des cycles.
 static func path(sc, id: String) -> Array:
 	var out: Array = []
@@ -96,7 +175,7 @@ static func roots(sc) -> Array:
 
 ## Historique envoyé au modèle pour répondre à `upto_id` : le prompt système puis les messages du chemin racine -> nœud
 ## (les réponses d'un autre assistant sont présentées comme un message d'utilisateur étiqueté).
-static func history(sc, upto_id: String, system: String, cur_ai: int, name_of := Callable(), max_n := HISTORY_MAX) -> Array:
+static func history(sc, upto_id: String, system: String, cur_ai: int, name_of := Callable(), max_n := HISTORY_MAX, img_of := Callable()) -> Array:
 	var chain: Array = path(sc, upto_id).filter(func(m): return str(m.get("text", "")).strip_edges() != "")
 	if chain.size() > max_n:
 		chain = chain.slice(chain.size() - max_n)
@@ -106,7 +185,12 @@ static func history(sc, upto_id: String, system: String, cur_ai: int, name_of :=
 			var nm := str(name_of.call(int(m.ai))) if name_of.is_valid() else "Assistant"
 			out.append({"role": "user", "content": "[%s] %s" % [nm, str(m.text)]})
 		else:
-			out.append({"role": "user" if str(m.role) != "assistant" else "assistant", "content": str(m.text)})
+			var o := {"role": "user" if str(m.role) != "assistant" else "assistant", "content": str(m.text)}
+			if img_of.is_valid() and str(m.get("img", "")) != "":
+				var b64 := str(img_of.call(m))
+				if b64 != "":
+					o["images"] = [b64]  # image connectée au nœud : le modèle la voit avec ce message
+			out.append(o)
 	return out
 
 

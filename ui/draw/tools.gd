@@ -5,6 +5,9 @@ extends "res://ui/draw/core.gd"
 # ------------------------------------------------------------------ actions
 
 func delete_sel() -> void:
+	if edge_sel != "":
+		cut_edge(edge_sel)  # un lien sélectionné : on le coupe seulement, les nœuds restent
+		return
 	var ids: Array = []
 	for el in sc.selected():
 		if not el.locked:

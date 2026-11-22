@@ -849,6 +849,14 @@ func chat_regen(id: String, ai := -1) -> Dictionary:
 	return a
 
 
+## Image (base64) connectée à un nœud de chat, ou "".
+func _msg_img(m: Dictionary) -> String:
+	var im: Dictionary = scene.get_el(str(m.get("img", "")))
+	if im.is_empty() or image_tex(im) == null:
+		return ""
+	return str(imgs[str(im.id)].b64)
+
+
 func _chat_answer(a: Dictionary) -> void:
 	var id := str(a.id)
 	var u: Dictionary = Chat.parent_of(scene, a)
@@ -857,7 +865,7 @@ func _chat_answer(a: Dictionary) -> void:
 	var ai := int(a.get("ai", 0))
 	a["done"] = false
 	a["text"] = ""
-	var msgs: Array = Chat.history(scene, str(u.id), _chat_system(ai), ai, _ai_name)
+	var msgs: Array = Chat.history(scene, str(u.id), _chat_system(ai), ai, _ai_name, Chat.HISTORY_MAX, _msg_img)
 	scene.mark(a)
 	var setter := func(t: String):
 		if scene.by_id.get(id, {}) != a:  # nœud supprimé (ou annulé) pendant l'écriture

@@ -223,6 +223,10 @@ static func _msg(ci: Control, S, el: Dictionary, op: float) -> void:
 	var par: Dictionary = Chat.parent_of(sc, el)
 	if not par.is_empty():
 		_msg_edge(ci, S, par, el, foc.on and foc.anc.has(str(par.id)) and in_path, op, col)
+	var ip := Chat.img_edge(sc, el)
+	if ip.size() == 2:
+		var isel: bool = S.tools.edge_sel == "img:" + str(el.id)
+		ci.draw_dashed_line(S.w2c(ip[0]), S.w2c(ip[1]), Color(T.WARN if isel else T.OK, op), 3.0 if isel else 2.0, 8.0)
 	ci.draw_rect(r, Color(T.CARD_HI if str(el.role) == "user" else T.CARD, op))
 	var hh := Chat.HEAD * z
 	ci.draw_rect(Rect2(r.position, Vector2(r.size.x, hh)), Color(col, 0.22 * op))
@@ -264,35 +268,12 @@ static func _msg(ci: Control, S, el: Dictionary, op: float) -> void:
 
 ## Flèche fine parent -> enfant (courbe de Bézier, pointe en bout), calculée d'après les positions courantes.
 static func _msg_edge(ci: Control, S, par: Dictionary, el: Dictionary, hot: bool, op: float, col: Color) -> void:
-	var a := Geom.rect(par)
-	var b := Geom.rect(el)
-	var p0: Vector2
-	var p1: Vector2
-	var d: Vector2
-	if b.position.y >= a.end.y - 4.0:
-		p0 = Vector2(a.get_center().x, a.end.y)
-		p1 = Vector2(b.get_center().x, b.position.y)
-		d = Vector2(0, 1)
-	elif b.position.x >= a.end.x - 4.0:
-		p0 = Vector2(a.end.x, a.get_center().y)
-		p1 = Vector2(b.position.x, b.get_center().y)
-		d = Vector2(1, 0)
-	elif b.end.x <= a.position.x + 4.0:
-		p0 = Vector2(a.position.x, a.get_center().y)
-		p1 = Vector2(b.end.x, b.get_center().y)
-		d = Vector2(-1, 0)
-	else:
-		p0 = Vector2(a.get_center().x, a.end.y)
-		p1 = Vector2(b.get_center().x, b.position.y)
-		d = Vector2(0, 1)
-	var k := clampf(p0.distance_to(p1) * 0.45, 16.0, 140.0)
-	var c1 := p0 + d * k
-	var c2 := p1 - d * k
 	var pts := PackedVector2Array()
-	for i in 17:
-		pts.append(S.w2c(Geom.bez(p0, c1, c2, p1, i / 16.0)))
-	var lc := Color(T.OK if hot else T.DIM, (0.95 if hot else 0.6) * op)
-	ci.draw_polyline(pts, lc, 2.5 if hot else 1.5, true)
+	for w in Chat.edge_pts(par, el):
+		pts.append(S.w2c(w))
+	var sel: bool = S.tools.edge_sel == str(el.id)
+	var lc := Color(T.WARN if sel else (T.OK if hot else T.DIM), (1.0 if sel else (0.95 if hot else 0.6)) * op)
+	ci.draw_polyline(pts, lc, 4.0 if sel else (2.5 if hot else 1.5), true)
 	var tip: Vector2 = pts[16]
 	var dir: Vector2 = (tip - pts[14]).normalized()
 	var perp := Vector2(-dir.y, dir.x)
@@ -322,6 +303,35 @@ static func _rot_rect(S, el: Dictionary, pad: float) -> PackedVector2Array:
 	return out
 
 
+## Ports des nœuds de chat (survolé / sélectionné) et fil en cours de tirage.
+static func _ports(ci: Control, S) -> void:
+	var tl = S.tools
+	var sc = S.scene
+	var ids := {}
+	if tl.hover != "" and tl.mode == "":
+		ids[tl.hover] = true
+	for id in sc.sel:
+		ids[id] = true
+	for id in ids:
+		var m: Dictionary = sc.get_el(str(id))
+		if m.is_empty() or (m.type != "msg" and m.type != "image"):
+			continue
+		var r := Geom.rect(m)
+		for p in ([Vector2(r.get_center().x, r.end.y)] if m.type == "image" else [Vector2(r.get_center().x, r.position.y), Vector2(r.get_center().x, r.end.y)]):
+			var cp: Vector2 = S.w2c(p)
+			ci.draw_circle(cp, 6.0, T.CARD)
+			ci.draw_arc(cp, 6.0, 0.0, TAU, 20, T.OK, 2.0, true)
+	if not tl.wire.is_empty():
+		var m2: Dictionary = sc.get_el(str(tl.wire.id))
+		if not m2.is_empty():
+			var r2 := Geom.rect(m2)
+			var a: Vector2 = S.w2c(Vector2(r2.get_center().x, r2.end.y if (tl.wire.out or m2.type == "image") else r2.position.y))
+			ci.draw_line(a, S.w2c(tl.wire.pos), T.WARN, 2.5, true)
+			var h: Dictionary = tl.top_hit(tl.wire.pos)
+			if not h.is_empty() and h.type == "msg" and str(h.id) != str(tl.wire.id):
+				_outline(ci, S, h, Color(T.WARN, 0.9), 3.0)
+
+
 static func draw_overlay(ci: Control, S) -> void:
 	var acc: Color = T.OK
 	var sc = S.scene
@@ -337,6 +347,7 @@ static func draw_overlay(ci: Control, S) -> void:
 			var pts := _rot_rect(S, b, 5.0 / S.zoom)
 			pts.append(pts[0])
 			ci.draw_polyline(pts, T.WARN, 2.5, true)
+	_ports(ci, S)
 	for id in sc.sel:
 		var el: Dictionary = sc.get_el(id)
 		if not el.is_empty() and (sc.sel.size() > 1 or el.type not in Geom.LINEAR or el.type == "freedraw"):
