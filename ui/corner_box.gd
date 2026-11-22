@@ -43,31 +43,6 @@ func _slot_offset(w: int) -> int:
 	return off
 
 
-## Apps Goodview ouvertes : fichiers `<id>.app` (JSON {name, ts}) publiés par leurs HUD, battement < 5 s. Renvoie {id: titre de fenêtre}.
-func _running() -> Dictionary:
-	var out := {}
-	var dir := OS.get_environment("HOME") + "/.config/goodview/hud"
-	var now := Time.get_unix_time_from_system()
-	for f in DirAccess.get_files_at(dir):
-		if not f.ends_with(".app"):
-			continue
-		var d = JSON.parse_string(FileAccess.get_file_as_string(dir + "/" + f))
-		if d is Dictionary and now - float(d.get("ts", 0)) < 5.0:
-			out[f.trim_suffix(".app")] = str(d.get("name", f.trim_suffix(".app")))
-	return out
-
-
-## Met la fenêtre d'une app déjà ouverte au premier plan (wmctrl sur l'hôte) ; inutile de relancer une 2e instance.
-func _focus(title: String) -> void:
-	var o := []
-	if OS.execute("flatpak-spawn", ["--host", "wmctrl", "-l"], o) != 0 or o.is_empty():
-		return
-	for line in str(o[0]).split("\n"):
-		if line.ends_with(" " + title):
-			OS.execute("flatpak-spawn", ["--host", "wmctrl", "-i", "-a", line.split(" ")[0]])
-			return
-
-
 func _exit_tree() -> void:
 	DirAccess.remove_absolute(OS.get_environment("HOME") + "/.config/goodview/hud/" + SLOT_ID + ".txt")
 
@@ -118,7 +93,7 @@ func _collect() -> void:
 		return
 	var l: Array = []
 	var upd: Array = ctx.updates().map(func(a): return str(a.name))
-	var run := _running()
+	var run: Dictionary = ctx.installer.running()
 	for n in ctx.store.installed:
 		var a: Dictionary = ctx.catalog.find(n)
 		l.append({"name": str(n), "icon": a.get("icon") if not a.is_empty() else null, "update": str(n) in upd,
@@ -264,6 +239,6 @@ func _act(id: String) -> void:
 		_:
 			for e in entries:
 				if e.name == id and e.running:
-					_focus(str(e.title))
+					ctx.installer.focus(str(e.title))
 					return
 			ctx.installer.launch(id)

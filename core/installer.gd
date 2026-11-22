@@ -210,6 +210,10 @@ func launch(app_name: String) -> String:
 		return ""
 	if not FileAccess.file_exists(exe):
 		return "Exécutable introuvable : relance l'installation."
+	var run := running()
+	if run.has(app_name):  # déjà ouverte : on la ramène au premier plan au lieu d'ouvrir une 2e instance
+		focus(str(run[app_name]))
+		return ""
 	return "" if OS.create_process(exe, []) > 0 else "Impossible de lancer " + exe.get_file()
 
 
@@ -258,3 +262,28 @@ func set_shortcut(a: Dictionary, on: bool) -> bool:
 		OS.execute("chmod", ["+x", path])
 		OS.execute("gio", ["set", path, "metadata::trusted", "true"])
 	return true
+
+
+## Apps Goodview ouvertes : fichiers `<id>.app` (JSON {name, ts}) publiés par leurs HUD, battement < 5 s. Renvoie {id: titre de fenêtre}.
+func running() -> Dictionary:
+	var out := {}
+	var dir := OS.get_environment("HOME") + "/.config/goodview/hud"
+	var now := Time.get_unix_time_from_system()
+	for f in DirAccess.get_files_at(dir):
+		if not f.ends_with(".app"):
+			continue
+		var d = JSON.parse_string(FileAccess.get_file_as_string(dir + "/" + f))
+		if d is Dictionary and now - float(d.get("ts", 0)) < 5.0:
+			out[f.trim_suffix(".app")] = str(d.get("name", f.trim_suffix(".app")))
+	return out
+
+
+## Met la fenêtre d'une app déjà ouverte au premier plan (wmctrl sur l'hôte).
+func focus(title: String) -> void:
+	var o := []
+	if OS.execute("flatpak-spawn", ["--host", "wmctrl", "-l"], o) != 0 or o.is_empty():
+		return
+	for line in str(o[0]).split("\n"):
+		if line.ends_with(" " + title):
+			OS.execute("flatpak-spawn", ["--host", "wmctrl", "-i", "-a", line.split(" ")[0]])
+			return

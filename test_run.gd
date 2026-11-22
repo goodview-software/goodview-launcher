@@ -101,6 +101,7 @@ func run(host: Node) -> void:
 	check(ctx.updates().size() == 2, "2 mises à jour détectées")
 	check(ctx.has_updates(), "badge de mise à jour")
 	check(router.nav.badge, "badge de mise à jour sur l'onglet Apps")
+	check(ctx.installer.running() is Dictionary, "installer.running() lisible (anti-doublon au lancement)")
 	for mode in ["recent", "az", "updates"]:
 		home.sort_mode = mode
 		home._render_list()
