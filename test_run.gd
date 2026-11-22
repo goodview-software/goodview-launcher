@@ -806,6 +806,16 @@ func run_models() -> void:
 	check("pas pris en charge" in fi and "0.33.1" in fi and "Choisis-en un autre" in fi, "message lisible : architecture inconnue")
 	check("n'est pas installé" in Ollama.friendly("model_missing", "", "x") and "mémoire" in Ollama.friendly("memory", "") and "injoignable" in Ollama.friendly("offline", ""), "messages : absent / mémoire / éteint")
 	check(U.is_broken("llama3.2-vision:latest") and not U.is_vision("llama3.2-vision:latest") and U.get_u(7).model == "gemma3:4b", "Brume sur gemma3:4b, mllama écarté")
+	var hd := OS.get_environment("HOME") + "/.config/goodview/hud"
+	DirAccess.make_dir_recursive_absolute(hd)
+	var tf := FileAccess.open(hd + "/zz-test.app", FileAccess.WRITE)
+	tf.store_string(JSON.stringify({"name": "ZZ Test", "ts": int(Time.get_unix_time_from_system())}))
+	tf.close()
+	var cb: Window = load("res://ui/corner_box.gd").new()
+	var rn: Dictionary = cb._running()
+	cb.free()
+	DirAccess.remove_absolute(hd + "/zz-test.app")
+	check(rn.get("zz-test", "") == "ZZ Test", "HUD : app ouverte détectée via son fichier .app")
 	orch.event.get_connections().map(func(c): orch.event.disconnect(c.callable))
 	ctx.ollama.bad_models.clear()
 	handler = default_handler

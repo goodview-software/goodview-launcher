@@ -43,6 +43,31 @@ func _slot_offset(w: int) -> int:
 	return off
 
 
+## Apps Goodview ouvertes : fichiers `<id>.app` (JSON {name, ts}) publiés par leurs HUD, battement < 5 s. Renvoie {id: titre de fenêtre}.
+func _running() -> Dictionary:
+	var out := {}
+	var dir := OS.get_environment("HOME") + "/.config/goodview/hud"
+	var now := Time.get_unix_time_from_system()
+	for f in DirAccess.get_files_at(dir):
+		if not f.ends_with(".app"):
+			continue
+		var d = JSON.parse_string(FileAccess.get_file_as_string(dir + "/" + f))
+		if d is Dictionary and now - float(d.get("ts", 0)) < 5.0:
+			out[f.trim_suffix(".app")] = str(d.get("name", f.trim_suffix(".app")))
+	return out
+
+
+## Met la fenêtre d'une app déjà ouverte au premier plan (wmctrl sur l'hôte) ; inutile de relancer une 2e instance.
+func _focus(title: String) -> void:
+	var o := []
+	if OS.execute("flatpak-spawn", ["--host", "wmctrl", "-l"], o) != 0 or o.is_empty():
+		return
+	for line in str(o[0]).split("\n"):
+		if line.ends_with(" " + title):
+			OS.execute("flatpak-spawn", ["--host", "wmctrl", "-i", "-a", line.split(" ")[0]])
+			return
+
+
 func _exit_tree() -> void:
 	DirAccess.remove_absolute(OS.get_environment("HOME") + "/.config/goodview/hud/" + SLOT_ID + ".txt")
 
@@ -93,11 +118,16 @@ func _collect() -> void:
 		return
 	var l: Array = []
 	var upd: Array = ctx.updates().map(func(a): return str(a.name))
+	var run := _running()
 	for n in ctx.store.installed:
 		var a: Dictionary = ctx.catalog.find(n)
-		l.append({"name": str(n), "icon": a.get("icon") if not a.is_empty() else null, "update": str(n) in upd})
+		l.append({"name": str(n), "icon": a.get("icon") if not a.is_empty() else null, "update": str(n) in upd,
+				"running": run.has(str(n)), "title": str(run.get(str(n), ""))})
+	for n in run:
+		if not ctx.store.installed.has(n):  # ouverte hors launcher (sources, « dev »)
+			l.append({"name": str(n), "icon": null, "update": false, "running": true, "title": str(run[n])})
 	entries = l
-	var sig := str(l.map(func(e): return "%s%s%s" % [e.name, e.update, e.icon != null])) + str(expanded) + str(ctx.has_updates())
+	var sig := str(l.map(func(e): return "%s%s%s%s" % [e.name, e.update, e.icon != null, e.running])) + str(expanded) + str(ctx.has_updates())
 	if sig != _sig:
 		_sig = sig
 		_relayout()
@@ -144,6 +174,9 @@ func _app(r: Rect2, e: Dictionary) -> void:
 		cv.draw_texture_rect(e.icon, r.grow(-5), false)
 	else:
 		_txt(r.position + Vector2(r.size.x * 0.3, r.size.y * 0.68), str(e.name).left(1).to_upper(), 20, Color("e8ecf1"))
+	if e.running:
+		cv.draw_rect(Rect2(r.position.x, r.end.y - 1, r.size.x, 5), Color("0b0e12"))
+		cv.draw_rect(Rect2(r.position.x + 1, r.end.y, r.size.x - 2, 3), Color("4de1b4"))
 	if e.update:
 		cv.draw_rect(Rect2(r.end.x - 8, r.position.y - 4, 12, 12).grow(2), Color.BLACK)
 		cv.draw_rect(Rect2(r.end.x - 8, r.position.y - 4, 12, 12), PAL["y"])
@@ -187,7 +220,9 @@ func _draw_ui() -> void:
 				cv.draw_rect(row, Color("232a34"))
 			_app(Rect2(14, ry + 3, 38, 38), e)
 			_txt(Vector2(62, ry + 28), str(e.name), 17, Color("e8ecf1"), W - 62 - 50)
-			if e.update:
+			if e.running:
+				_txt(Vector2(W - 74, ry + 28), "OUVERT", 14, Color("4de1b4"))
+			elif e.update:
 				_txt(Vector2(W - 54, ry + 28), "MAJ", 14, PAL["y"])
 			hits.append([row, str(e.name)])
 			ry += ROW_H
@@ -227,4 +262,8 @@ func _act(id: String) -> void:
 				w.mode = Window.MODE_WINDOWED
 			w.grab_focus()
 		_:
+			for e in entries:
+				if e.name == id and e.running:
+					_focus(str(e.title))
+					return
 			ctx.installer.launch(id)
