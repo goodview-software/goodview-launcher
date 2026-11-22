@@ -14,24 +14,15 @@ var pickers: Array = []
 var edit: LineEdit
 var avatar := 0
 var _picked := false  # le choix de mascotte vient de cet éditeur (sinon on ne l'écrase pas)
-var name_lbl: Label
-var motto_lbl: Label
-var role_lbl: Label
 
 
 func _ready() -> void:
 	avatar = ctx.store.avatar
-	add_theme_constant_override("separation", 16)
+	add_theme_constant_override("separation", 24)
 	preview = W.Avatar.new()
-	preview.custom_minimum_size = Vector2(130, 130)
+	preview.custom_minimum_size = Vector2(150, 150)
 	preview.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	add_child(preview)
-	name_lbl = W.label("", 28, T.OK, self)
-	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	motto_lbl = W.label("", 15, T.TEXT, self)
-	motto_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	role_lbl = W.label("", 13, T.DIM, self)
-	role_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var pick := HFlowContainer.new()
 	pick.alignment = FlowContainer.ALIGNMENT_CENTER
 	pick.add_theme_constant_override("h_separation", 8)
@@ -69,11 +60,6 @@ func _pick(i: int) -> void:
 
 func _refresh() -> void:
 	preview.variant = avatar
-	var u := U.get_u(avatar)
-	name_lbl.text = u.name
-	name_lbl.add_theme_color_override("font_color", Color(str(u.accent)))
-	motto_lbl.text = "« %s »" % u.motto
-	role_lbl.text = u.specialty
 	for i in pickers.size():
 		pickers[i].selected = i == avatar
 

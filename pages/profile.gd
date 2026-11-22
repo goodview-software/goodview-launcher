@@ -18,9 +18,6 @@ func build() -> void:
 	var ed := Editor.new()
 	ed.ctx = ctx
 	body.add_child(ed)
-	var c := W.card(body)
-	var l := W.label("Ton pseudo et ta mascotte sont partagés avec toutes les apps Goodview, avec la charte de couleurs de son univers.", 14, T.DIM, c)
-	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
 
 func on_back() -> bool:
