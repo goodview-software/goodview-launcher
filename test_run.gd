@@ -115,6 +115,7 @@ func run(host: Node) -> void:
 	check(router.nav.badge, "badge de mise à jour sur l'onglet Apps")
 	var hard: Array = load("res://kit/lint.gd").hardcoded_colors(["res://pages", "res://ui", "res://core"], ["ui/theme.gd", "ui/widgets.gd", "ui/corner_box.gd", "ui/icons.gd"])
 	check(hard.is_empty(), "pas de couleur en dur hors thème/HUD : " + ", ".join(hard.slice(0, 5)))
+	check(ctx.background_enabled() and "Exec=" in ctx.autostart_entry(), "mode arrière-plan par défaut + entrée de démarrage automatique")
 	check(ctx.installer.running() is Dictionary, "installer.running() lisible (anti-doublon au lancement)")
 	for mode in ["recent", "az", "updates"]:
 		home.sort_mode = mode
@@ -320,8 +321,12 @@ func run_ui() -> void:
 			await frames(3)
 			check(home._list.get_child_count() > 0, "apps : %d apps, %d px" % [n, w])
 			if n > 0:
-				var g: Container = home._list.get_child(0)
-				check(g.get_script() == K.Grid and g.get_child_count() == n, "grille adaptative (%d)" % n)
+				var grids: Array = home._list.get_children().filter(func(c): return c.get_script() == K.Grid)  # une grille par catégorie
+				var total := 0
+				for gr in grids:
+					total += gr.get_child_count()
+				check(not grids.is_empty() and total == n, "grille adaptative (%d)" % n)
+				var g: Container = grids[0]
 				check(g.columns == g.cols_for(g.size.x) and (w > 700 or g.columns <= 2), "colonnes adaptées à %d px : %d" % [w, g.columns])
 				if w == 1100 and n >= 4:
 					check(g.columns >= 3, "au moins 3 colonnes à 1100 px")

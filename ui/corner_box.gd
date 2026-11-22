@@ -233,6 +233,7 @@ func _act(id: String) -> void:
 			_relayout()
 		"open":
 			var w := get_tree().root
+			w.show()
 			if w.mode == Window.MODE_MINIMIZED:
 				w.mode = Window.MODE_WINDOWED
 			w.grab_focus()

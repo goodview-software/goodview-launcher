@@ -18,6 +18,7 @@ var catalog: Catalog
 var installer: Installer
 var updater: Updater
 var router: Node  # ui/router.gd
+var quitting := false  # vrai quitter demandé : la croix ne masque plus la fenêtre
 var active := 0  # assistant actif (= univers affiché)
 
 
@@ -134,3 +135,35 @@ func fmt_size(bytes: float) -> String:
 	if bytes < 1048576.0:
 		return "%.0f Ko" % (bytes / 1024.0)
 	return "%.1f Mo" % (bytes / 1048576.0)
+
+
+## Reste actif en arrière-plan (la croix masque la fenêtre ; l'overlay des apps ouvertes continue). Activé par défaut.
+func background_enabled() -> bool:
+	return bool(store.get_s("app", "background", true))
+
+
+const AUTOSTART := "/.config/autostart/goodview-launcher.desktop"
+
+
+## Contenu du fichier de démarrage automatique (exécutable de l'export, ou Godot + projet en développement).
+func autostart_entry() -> String:
+	var exec := OS.get_executable_path()
+	if not OS.has_feature("template"):
+		exec = "flatpak run org.godotengine.Godot --path " + ProjectSettings.globalize_path("res://").trim_suffix("/")
+	return "[Desktop Entry]\nType=Application\nName=Goodview Launcher\nExec=%s\nX-GNOME-Autostart-enabled=true\nTerminal=false\n" % exec
+
+
+func autostart_enabled() -> bool:
+	return FileAccess.file_exists(OS.get_environment("HOME") + AUTOSTART)
+
+
+func set_autostart(on: bool) -> void:
+	var p := OS.get_environment("HOME") + AUTOSTART
+	if on:
+		DirAccess.make_dir_recursive_absolute(p.get_base_dir())
+		var f := FileAccess.open(p, FileAccess.WRITE)
+		if f != null:
+			f.store_string(autostart_entry())
+			f.close()
+	else:
+		DirAccess.remove_absolute(p)

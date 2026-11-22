@@ -26,6 +26,10 @@ func _ready() -> void:
 		return
 	if not Single.claim(self, "goodview-launcher"):  # déjà ouvert : on ne double pas
 		return
+	var single := Single.of(self)
+	if single != null:
+		single.wake.connect(_show_window)  # un 2e lancement rouvre la fenêtre masquée
+	get_tree().auto_accept_quit = false
 	get_window().title = APP_TITLE
 	get_window().min_size = Vector2i(360, 520)
 	ctx = Ctx.new()
@@ -101,7 +105,26 @@ func _notification(what: int) -> void:
 			if router != null:
 				router.back()
 		NOTIFICATION_WM_CLOSE_REQUEST:
+			if ctx == null:
+				get_tree().quit()
+				return
 			_save_window()
+			if ctx.quitting or not ctx.background_enabled() or not _has_overlay():
+				get_tree().quit()
+			else:
+				get_window().hide()  # reste vivant : l'overlay continue de gérer les apps
+
+
+func _has_overlay() -> bool:
+	return OS.has_feature("pc") and DisplayServer.get_name() != "headless" and OS.get_environment("GL_NOBOX") != "1"
+
+
+func _show_window() -> void:
+	var w := get_window()
+	w.show()
+	if w.mode == Window.MODE_MINIMIZED:
+		w.mode = Window.MODE_WINDOWED
+	w.grab_focus()
 
 
 # ------------------------------------------------------------------ Taille / position de la fenêtre
