@@ -82,6 +82,13 @@ func run(host: Node) -> void:
 		ctx.catalog.set_fake([], st)
 		await frames()
 		check(home._list.get_child_count() > 0, "accueil état " + st + " : contenu affiché")
+	var cl: Control = load("res://ui/cube_loader.gd").new()
+	cl.size = Vector2(800, 220)
+	cl.value = 0.5
+	check(cl.value == 0.5, "cube loader : valeur")
+	cl.finish()
+	check(cl.value == 1.0, "cube loader : 100 % après finish")
+	cl.free()
 	ctx.catalog.online = false
 	ctx.catalog.set_fake(fake_list(3))
 	await frames()
@@ -317,7 +324,7 @@ func run_ui() -> void:
 	_host.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	ctx.catalog.set_fake([], "loading")
 	await frames(2)
-	check(home._list.get_child(0).get_script() == K.Grid, "chargement : cartes fantômes en grille")
+	check(home._list.get_child(0).get_script() == load("res://ui/cube_loader.gd"), "chargement : cube qui roule")
 	ctx.catalog.set_fake(fake_list(7))
 	await frames(2)
 
