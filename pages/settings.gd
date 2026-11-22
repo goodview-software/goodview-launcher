@@ -26,30 +26,6 @@ func build() -> void:
 		get_window().content_scale_factor = float(id))
 	c0.add_child(sz)
 
-	# --- Fonctionnement
-	var cb := W.card(body)
-	W.label("Fonctionnement", 18, T.TEXT, cb)
-	var rb := W.setting_row(cb, "Rester actif en arrière-plan", "La croix masque la fenêtre ; l'overlay des apps ouvertes reste affiché")
-	var tb := W.Toggle.new()
-	tb.set_on(ctx.background_enabled())
-	tb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	tb.toggled.connect(func(on: bool): ctx.store.set_s("app", "background", on))
-	rb.add_child(tb)
-	W.hsep(cb)
-	var ra := W.setting_row(cb, "Lancer au démarrage de la session", "Le launcher et l'overlay sont prêts dès l'ouverture")
-	var ta := W.Toggle.new()
-	ta.set_on(ctx.autostart_enabled())
-	ta.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	ta.toggled.connect(func(on: bool): ctx.set_autostart(on))
-	ra.add_child(ta)
-	W.hsep(cb)
-	var rq := W.setting_row(cb, "Quitter complètement", "Ferme aussi l'overlay")
-	var bq := W.Btn.new("Quitter", "soft")
-	bq.custom_minimum_size = Vector2(0, 44)
-	bq.pressed.connect(func():
-		ctx.quitting = true
-		get_tree().root.propagate_notification(NOTIFICATION_WM_CLOSE_REQUEST))
-	rq.add_child(bq)
 	# --- Mises à jour
 	var c1 := W.card(body)
 	W.label("Mises à jour", 18, T.TEXT, c1)

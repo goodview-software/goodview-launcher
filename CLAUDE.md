@@ -9,7 +9,7 @@ Voir `README.md` (fonctions, architecture), `TODO.md`, `kit/README.md` (kit UI).
 4. Pas de capture d'écran par défaut. Voir une page précise : `flatpak run --env=GL_PAGE=<page> org.godotengine.Godot --path .` (une seule fois, en fin de chantier).
 - `godot` n'est PAS dans le PATH : toujours `flatpak run org.godotengine.Godot`.
 - Les messages « ObjectDB leaked », « resources still in use », « Lambda capture freed » en fin de test sont bénins (voir TODO.md).
-- Fenêtre : `GL_NOBOX=1` désactive la boîte de coin (`ui/corner_box.gd`). Fermer les autres instances Godot/launcher avant de relancer.
+- Fermer les autres instances Godot/launcher avant de relancer.
 
 ## Où chercher (ne pas lire les gros fichiers en entier : grep puis offset/limit)
 - Le chat IA n'est plus ici : c'est l'app autonome `~/chat-rapide` (repo goodview-software/chat-rapide, listée par le catalogue une fois publiée). `ui/universe.gd` ne sert qu'au profil (8 mascottes/thèmes).
