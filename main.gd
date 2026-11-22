@@ -42,8 +42,29 @@ func _ready() -> void:
 	ctx.start()
 	Pixelize.install(self)
 	_add_corner_box()
+	_add_splash()
 	if OS.get_environment("GL_PAGE") != "":  # débogage : ouvre directement une page d'onglet
 		router.go_tab(OS.get_environment("GL_PAGE"))
+
+
+## Écran de démarrage : le cube roule jusqu'au centre (0 → 100 %) puis s'efface.
+func _add_splash() -> void:
+	if DisplayServer.get_name() == "headless" or OS.get_environment("GL_NOSPLASH") == "1":
+		return
+	var bg := ColorRect.new()
+	bg.color = T.BG
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	bg.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(bg)
+	var cl: Control = load("res://ui/cube_loader.gd").new()
+	cl.auto = false
+	cl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	bg.add_child(cl)
+	var tw := create_tween()
+	tw.tween_property(cl, "value", 1.0, 2.6).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_interval(0.35)
+	tw.tween_property(bg, "modulate:a", 0.0, 0.3)
+	tw.tween_callback(bg.queue_free)
 
 
 func _add_corner_box() -> void:
