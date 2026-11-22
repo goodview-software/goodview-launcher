@@ -5,7 +5,7 @@ Voir `README.md` (fonctions, architecture), `TODO.md`, `kit/README.md` (kit UI).
 ## Boucle rapide (toujours dans cet ordre, une seule vérification ciblée)
 1. Après un edit : `./tools/t.sh load` (~5 s) → n'affiche que les erreurs de script/parse. Vide = bon.
 2. Avant de conclure : `./tools/t.sh` (~15 s) → doit afficher `OK` ; sinon `ECHECS : …` (lire le message du `check`).
-3. UI/mise en page : `./tools/t.sh lint` ; cibler avec `GL_LINT_ONLY=board,home`, détails `GL_LINT_DBG=1`, `GL_DBG=1`.
+3. UI/mise en page : `./tools/t.sh lint` ; cibler avec `GL_LINT_ONLY=chat,home`, détails `GL_LINT_DBG=1`, `GL_DBG=1`.
 4. Pas de capture d'écran par défaut. Voir une page précise : `flatpak run --env=GL_PAGE=<page> org.godotengine.Godot --path .` (une seule fois, en fin de chantier).
 - `godot` n'est PAS dans le PATH : toujours `flatpak run org.godotengine.Godot`.
 - Les messages « ObjectDB leaked », « resources still in use », « Lambda capture freed » en fin de test sont bénins (voir TODO.md).
@@ -24,7 +24,7 @@ Voir `README.md` (fonctions, architecture), `TODO.md`, `kit/README.md` (kit UI).
 - Données utilisateur : `user://` (`chats/`, `settings.cfg`, `installed.json`) ; formats stables → toute évolution = migration (voir `scene.gd` « migré »), jamais de rupture.
 - Tout reste local (Ollama `127.0.0.1:11434`) : aucun appel réseau externe dans le code ni dans les tests (faux serveur dans `test_run.gd`).
 - Modèle Ollama par défaut économique ; pas de nouveau test « réel » dans la suite par défaut.
-- Ajout de fonctionnalité → ajouter un `check(...)` dans `test_run.gd` (ou `test_board.gd` pour le plan) dans le même chantier.
+- Ajout de fonctionnalité → ajouter un `check(...)` dans `test_run.gd` dans le même chantier.
 
 ## Debug
 - Erreur de script : `./tools/t.sh load` donne fichier:ligne. Lire seulement ces lignes (`Read` offset/limit).
@@ -33,6 +33,6 @@ Voir `README.md` (fonctions, architecture), `TODO.md`, `kit/README.md` (kit UI).
 - Pour tracer : `print("DBG …")` temporaire, à retirer avant commit (grep `DBG` : ceux déjà présents dans `test_run.gd` sont légitimes).
 
 ## Git / release
-- Commits en français, courts, au format du log (ex. « Plan : … »). Branche `main`. Commit + push sans redemander quand les tests sont verts.
+- Commits en français, courts, au format du log (ex. « Chat : … »). Branche `main`. Commit + push sans redemander quand les tests sont verts.
 - `.godot/`, `build/`, `export/` ignorés. Ne pas committer `export_presets.cfg` modifié par accident.
 - Release uniquement sur demande (« publie ») : `./release.sh X.Y.Z "Notes"` (incrémente `version.gd`, exporte pck+zip+APK, tag, release GitHub).
