@@ -34,6 +34,28 @@ static func title(a: Dictionary) -> String:
 	return str(a.manifest.get("name", str(a.name).replace("-", " ").capitalize()))
 
 
+## Catégories de la boutique (id, libellé). Une app choisit la sienne via app.json {"category": "jeux"} ou un topic GitHub.
+const CATEGORIES := [["pocket", "Pocket"], ["outils", "Outils"], ["jeux", "Jeux"]]
+
+
+static func category(a: Dictionary) -> String:
+	var ids: Array = CATEGORIES.map(func(c): return c[0])
+	var m := str(a.manifest.get("category", "")).to_lower()
+	if m in ids:
+		return m
+	for t in a.repo.get("topics", []):
+		if str(t).to_lower() in ids:
+			return str(t).to_lower()
+	return "pocket" if str(a.name).begins_with("pocket-") else "outils"
+
+
+static func category_label(id: String) -> String:
+	for c in CATEGORIES:
+		if c[0] == id:
+			return c[1]
+	return id.capitalize()
+
+
 static func tagline(a: Dictionary) -> String:
 	var t = a.manifest.get("tagline", a.repo.get("description", ""))
 	return str(t) if t != null else ""
@@ -252,7 +274,7 @@ func refresh() -> void:
 				a = {"name": repo.name, "org": org, "repo": {}, "release": {}, "asset": {}, "icon": null, "manifest": {}}
 			var lic = repo.get("license")
 			a.repo = {"description": repo.get("description", ""), "stars": repo.get("stargazers_count", 0),
-					"pushed_at": repo.get("pushed_at", ""),
+					"pushed_at": repo.get("pushed_at", ""), "topics": repo.get("topics", []),
 					"license": str(lic.get("spdx_id", "")) if lic is Dictionary else ""}
 			await fetch_release(a)
 			var m: Array = await get_bytes("%s/%s/%s/HEAD/app.json" % [RAW, org, repo.name])

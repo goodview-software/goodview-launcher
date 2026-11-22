@@ -89,6 +89,11 @@ func run(host: Node) -> void:
 	cl.finish()
 	check(cl.value == 1.0, "cube loader : 100 % après finish")
 	cl.free()
+	var Cat: Script = load("res://core/catalog.gd")
+	check(Cat.category({"name": "pocket-x", "manifest": {}, "repo": {}}) == "pocket", "catégorie : préfixe pocket-")
+	check(Cat.category({"name": "x", "manifest": {"category": "Jeux"}, "repo": {}}) == "jeux", "catégorie : app.json")
+	check(Cat.category({"name": "x", "manifest": {}, "repo": {"topics": ["jeux"]}}) == "jeux", "catégorie : topic GitHub")
+	check(Cat.category({"name": "x", "manifest": {}, "repo": {}}) == "outils", "catégorie : défaut outils")
 	ctx.catalog.online = false
 	ctx.catalog.set_fake(fake_list(3))
 	await frames()

@@ -16,6 +16,8 @@ var _search: Control
 var _list: VBoxContainer
 var _prog: Control
 var _prog_lbl: Label
+var _cats: Control
+var cat_filter := "all"
 var query := ""
 var sort_mode := "recent"
 var force_wide := -1  # -1 auto, 0 une colonne, 1 deux colonnes (tests)
@@ -34,6 +36,7 @@ func set_wide(_v: bool) -> void:
 func build() -> void:
 	set_title("Goodview")
 	sort_mode = str(ctx.store.get_s("ui", "sort", "recent"))
+	cat_filter = str(ctx.store.get_s("ui", "cat", "all"))
 	var gear := W.IconBtn.new("gear", 44)
 	gear.tooltip_text = "Paramètres"
 	gear.pressed.connect(func(): router.push("settings"))
@@ -60,6 +63,12 @@ func build() -> void:
 		query = t.strip_edges().to_lower()
 		_render_list())
 	col.add_child(_search)
+	_cats = K.Segmented.new()
+	_cats.changed.connect(func(id: String):
+		cat_filter = id
+		ctx.store.set_s("ui", "cat", id)
+		_render_list())
+	col.add_child(_cats)
 	_list = VBoxContainer.new()
 	_list.add_theme_constant_override("separation", Tk.S3)
 	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -213,6 +222,8 @@ func _on_progress(r: float) -> void:
 
 func _visible_apps() -> Array:
 	var out: Array = ctx.catalog.apps.filter(func(a):
+		if cat_filter != "all" and Catalog.category(a) != cat_filter:
+			return false
 		if query == "":
 			return true
 		return (Catalog.title(a) + " " + Catalog.tagline(a) + " " + str(a.name)).to_lower().contains(query))
@@ -258,13 +269,40 @@ func _render_list() -> void:
 			_:
 				_state_view("off", "Aucune app pour l'instant", "Les apps Goodview publiées apparaîtront ici.", true)
 		return
+	_sync_cats()
 	var apps := _visible_apps()
 	if apps.is_empty():
 		_state_view("off", "Aucun résultat", "Essaie un autre mot.", false)
 		return
-	var g2 := _grid()
-	for a in apps:
-		g2.add_child(_card(a))
+	if cat_filter != "all" or not _cats.visible:
+		var g2 := _grid()
+		for a in apps:
+			g2.add_child(_card(a))
+		return
+	# « Tout » : une section par catégorie, comme une boutique
+	for c in Catalog.CATEGORIES:
+		var sec: Array = apps.filter(func(a): return Catalog.category(a) == c[0])
+		if sec.is_empty():
+			continue
+		W.label(c[1], 20, T.TEXT, _list)
+		var g3 := _grid()
+		for a in sec:
+			g3.add_child(_card(a))
+
+
+## Puces de catégories : seulement celles qui contiennent des apps ; masquées s'il n'y en a qu'une.
+func _sync_cats() -> void:
+	var present: Array = []
+	for c in Catalog.CATEGORIES:
+		if ctx.catalog.apps.any(func(a): return Catalog.category(a) == c[0]):
+			present.append(c)
+	_cats.visible = present.size() > 1
+	var opts: Array = [["all", "Tout"]] + present
+	if not opts.any(func(o): return o[0] == cat_filter):
+		cat_filter = "all"
+	_cats.value = cat_filter
+	if _cats.options != opts:
+		_cats.options = opts
 
 
 func _grid() -> Container:
