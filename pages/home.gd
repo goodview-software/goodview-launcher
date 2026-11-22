@@ -242,7 +242,6 @@ func _render_list() -> void:
 	if _list == null or not is_instance_valid(_list):
 		return
 	_clear(_list)
-	_list.add_child(_assistant_grid())
 	var cat := ctx.catalog
 	var n := cat.apps.size()
 	_search.visible = n > SEARCH_MIN
@@ -268,34 +267,6 @@ func _render_list() -> void:
 	var g2 := _grid()
 	for a in apps:
 		g2.add_child(_card(a))
-
-
-## Pastille de l'assistant actif (mascotte sur tuile colorée), sans décor.
-class Tile extends Control:
-	var variant := 0
-
-	func _init(v := 0) -> void:
-		variant = v
-		texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		mouse_filter = Control.MOUSE_FILTER_IGNORE
-
-	func _draw() -> void:
-		var r := Rect2(Vector2.ZERO, size)
-		draw_rect(r, T.BG.lerp(U.color(variant), 0.35))
-		var row: int = W.Orb.ANIMS["idle"][0] + variant * 5
-		draw_texture_rect_region(W.Orb.SHEET, r.grow(-size.x * 0.1), Rect2(0, row * 32, 32, 32))
-
-
-## Sous-app intégrée : Chat rapide.
-func _assistant_grid() -> Control:
-	var g: Container = K.Grid.new()
-	g.min_card_width = 320
-	g.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var c2 := AppCard.new()
-	c2.setup(Tile.new(ctx.active), "Chat rapide", "Pose tes questions à un assistant, en local.", ["Intégré", T.OK], false, false)
-	c2.pressed.connect(func(): router.go_tab("chat"))
-	g.add_child(c2)
-	return g
 
 
 func _grid() -> Container:

@@ -12,12 +12,9 @@ const PAGES := {
 	"settings": preload("res://pages/settings.gd"),
 	"about": preload("res://pages/about.gd"),
 	"welcome": preload("res://pages/welcome.gd"),
-	"chat": preload("res://pages/chat.gd"),
-	"chat_history": preload("res://pages/chat_history.gd"),
-	"chat_settings": preload("res://pages/chat_settings.gd"),
 	"kit": preload("res://pages/kit_page.gd"),
 }
-const TABS := ["home", "chat", "profile"]  # pages racines conservées en mémoire (le chat est une sous-app : pas dans la barre)
+const TABS := ["home", "profile"]  # pages racines conservées en mémoire
 const NAV_TABS := ["home", "profile"]  # onglets de la barre basse
 const Nav := preload("res://ui/nav.gd")
 const SLIDE := 28.0

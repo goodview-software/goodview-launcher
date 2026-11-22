@@ -9,14 +9,13 @@ Voir `README.md` (fonctions, architecture), `TODO.md`, `kit/README.md` (kit UI).
 4. Pas de capture d'écran par défaut. Voir une page précise : `flatpak run --env=GL_PAGE=<page> org.godotengine.Godot --path .` (une seule fois, en fin de chantier).
 - `godot` n'est PAS dans le PATH : toujours `flatpak run org.godotengine.Godot`.
 - Les messages « ObjectDB leaked », « resources still in use », « Lambda capture freed » en fin de test sont bénins (voir TODO.md).
-- Tests réels (Ollama, minutes) uniquement sur demande : ``GL_TEST_OLLAMA=1`.
 - Fenêtre : `GL_NOBOX=1` désactive la boîte de coin (`ui/corner_box.gd`). Fermer les autres instances Godot/launcher avant de relancer.
 
 ## Où chercher (ne pas lire les gros fichiers en entier : grep puis offset/limit)
-- Chat rapide (seule sous-app IA) : `pages/chat.gd`, `ui/chat_ui.gd`, `core/ollama.gd`, `core/orchestra.gd`, `core/chats.gd`, assistants dans `ui/universe.gd`.
+- Le chat IA n'est plus ici : c'est l'app autonome `~/chat-rapide` (repo goodview-software/chat-rapide, listée par le catalogue une fois publiée). `ui/universe.gd` ne sert qu'au profil (8 mascottes/thèmes).
 - Navigation : `ui/router.gd` (pages enregistrées + `TABS`), démarrage dans `main.gd`, page de départ `ctx.start_page()`.
 - Catalogue/installation : `core/catalog.gd`, `installer.gd`, `updater.gd`, `pages/home.gd`, `app_page.gd`.
-- **Plan 2D supprimé** (ne pas le recréer). **Aucun prompt de base** : `U.system_prompt` renvoie "" ; seules les consignes de l'utilisateur (réglages) partent. Assistants = mascottes tout public, sans spécialité (pas de Godot, jeux, etc.). Délégation entre assistants désactivée (`orchestra.allow = false`).
+- **Plan 2D supprimé** (ne pas le recréer). Pas de chat ni d'Ollama dans le launcher.
 
 ## Conventions
 - Pas de `class_name` : tout par `preload("res://…")`. Un fichier de page = une page (base `pages/page.gd`) ; l'enregistrer dans `ui/router.gd`.

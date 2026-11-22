@@ -16,14 +16,7 @@ func _init() -> void:
 func build() -> void:
 	# --- Démarrage et assistants
 	var c0 := W.card(body)
-	W.label("Assistants", 18, T.TEXT, c0)
-	var r0 := W.setting_row(c0, "Page de démarrage", "")
-	var sg := W.Seg.new([["chat", "Assistant IA"], ["home", "Apps"]], ctx.start_page())
-	sg.custom_minimum_size = Vector2(190, 38)
-	sg.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	sg.changed.connect(func(id: String): ctx.store.set_s("ui", "start", id))
-	r0.add_child(sg)
-	W.hsep(c0)
+	W.label("Affichage", 18, T.TEXT, c0)
 	W.label("Taille de l'interface, en % (Ctrl + / Ctrl -)", 15, T.TEXT, c0)
 	var sz := W.Seg.new([["1.0", "100"], ["1.25", "125"], ["1.5", "150"], ["2.0", "200"], ["2.5", "250"]], str(float(ctx.store.get_s("ui", "scale", 1.0))))
 	sz.custom_minimum_size = Vector2(0, 38)
@@ -32,11 +25,6 @@ func build() -> void:
 		ctx.store.set_s("ui", "scale", float(id))
 		get_window().content_scale_factor = float(id))
 	c0.add_child(sz)
-	W.hsep(c0)
-	var r01 := W.setting_row(c0, "Réglages du chat", "Ollama, modèles, température, prompt")
-	var b01 := W.IconBtn.new("sliders", 44)
-	b01.pressed.connect(func(): router.push("chat_settings"))
-	r01.add_child(b01)
 
 	# --- Mises à jour
 	var c1 := W.card(body)

@@ -9,9 +9,6 @@ const Store := preload("res://core/store.gd")
 const Catalog := preload("res://core/catalog.gd")
 const Installer := preload("res://core/installer.gd")
 const Updater := preload("res://core/updater.gd")
-const Ollama := preload("res://core/ollama.gd")
-const Chats := preload("res://core/chats.gd")
-const Orchestra := preload("res://core/orchestra.gd")
 const T := preload("res://ui/theme.gd")
 const U := preload("res://ui/universe.gd")
 const VERSION: String = preload("res://version.gd").VERSION
@@ -21,14 +18,7 @@ var catalog: Catalog
 var installer: Installer
 var updater: Updater
 var router: Node  # ui/router.gd
-var ollama: Ollama
-var chats: Chats
-var orchestra: Orchestra
-var ollama_version := ""
-var models: Array = []  # [{name, size}] vus par /api/tags
 var active := 0  # assistant actif (= univers affiché)
-var pull := {}  # téléchargement de modèle en cours {model, ratio, status, req, error}
-var pending_chat := ""  # conversation à ouvrir par la page Chat
 
 
 ## sandbox = true : fichiers isolés dans user://gltest/, aucun réseau (tests).
@@ -51,16 +41,6 @@ func setup(sandbox := false) -> void:
 	updater.net = not sandbox
 	add_child(updater)
 	installer.finished.connect(_on_finished)
-	ollama = Ollama.new()
-	ollama.base_url = str(store.get_s("chat", "url", Ollama.DEFAULT_URL))
-	add_child(ollama)
-	chats = Chats.new(store.root + "chats/")
-	chats.export_dir = ProjectSettings.globalize_path(store.root + "export") if sandbox else ""
-	chats.load_index()
-	orchestra = Orchestra.new()
-	orchestra.ollama = ollama
-	orchestra.allow = false
-	add_child(orchestra)
 	active = store.avatar
 	T.apply(active)
 
@@ -111,29 +91,9 @@ func set_active(i: int) -> void:
 
 
 ## Vision : capacités /api/show si connues, sinon heuristique sur le nom (jamais pour les modèles cassés).
-func model_is_vision(m: String) -> bool:
-	if U.is_broken(m):
-		return false
-	if ollama.caps_cache.has(m):
-		return "vision" in ollama.caps_cache[m]
-	return U.is_vision(m)
-
-
-## Précharge les capacités (/api/show) des modèles installés.
-func prefetch_caps() -> void:
-	for m in models:
-		if not ollama.caps_cache.has(m.name):
-			await ollama.capabilities(m.name)
-
-
-## Modèle Ollama d'un assistant (préféré s'il est installé, sinon repli).
-func model_for(ai: int) -> String:
-	return U.pick_model(ai, models, ollama.bad_models)
-
-
-## Page affichée au démarrage : "home" (Apps, défaut) ou "chat" (l'assistant IA est une sous-app).
+## Page affichée au démarrage : les Apps.
 func start_page() -> String:
-	return "chat" if str(store.get_s("ui", "start", "home")) == "chat" else "home"
+	return "home"
 
 
 ## "soon" (pas de release), "nolinux", "none" (installable), "ok" (à jour), "update"
