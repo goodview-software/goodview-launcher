@@ -233,7 +233,6 @@ func run(host: Node) -> void:
 	await run_ui()
 	await run_assistants()
 	await run_models()
-	await run_board()
 	await run_lint(host)
 	if OS.get_environment("GL_TEST_OLLAMA") == "1":
 		await run_live()
@@ -361,7 +360,7 @@ func run_ui() -> void:
 			check(u.has(k), "assistant %d : champ %s" % [i, k])
 		check(float(u.anim.speed) > 0.0 and float(u.anim.bounce) > 0.0, "assistant %d : personnalité d'animation" % i)
 	check(seen.size() == 8, "noms uniques")
-	check(U.get_u(0).role == "general" and U.get_u(1).role == "expert", "Goody généraliste, les autres experts")
+	check(U.get_u(0).prompt == "" and U.system_prompt(0, false) == "", "aucun prompt de base")
 	var changes := [0]
 	ctx.theme_changed.connect(func(): changes[0] += 1)
 	var home: Control = router.go_tab("home")
@@ -377,7 +376,7 @@ func run_ui() -> void:
 	check(T.OK == U.color(4) and ctx.active == 4, "profil : changer de mascotte recolore tout")
 	var sh := U.shared_theme(4)
 	check(sh.name == "Mauve" and sh.accent == "#b58bff" and sh.has("bg") and sh.has("card"), "bloc theme du profil partagé")
-	check(U.pick_model(2, [{"name": "qwen2.5-coder:7b", "size": 1}, {"name": "gemma3:4b", "size": 1}]) == "qwen2.5-coder:7b", "modèle préféré")
+	check(U.pick_model(2, [{"name": "llama3.1:8b", "size": 1}, {"name": "gemma3:4b", "size": 1}]) == "llama3.1:8b", "modèle préféré")
 	check(U.pick_model(2, ["gemma3:4b"]) == "gemma3:4b" and U.pick_model(7, ["llama3.2-vision:latest", "qwen3:8b", "gemma3:4b"]) == "gemma3:4b", "repli de modèle")
 	check(U.pick_model(0, []) == "", "aucun modèle")
 	ctx.set_active(0)
@@ -449,7 +448,7 @@ func run_ui() -> void:
 			await frames(2)
 	get_window().size = Vector2i(1100, 720)
 	await frames(2)
-	for p in ["board", "chat_history", "chat_settings", "about", "settings", "profile"]:
+	for p in ["chat_history", "chat_settings", "about", "settings", "profile"]:
 		var pg2: Control = router.push(p)
 		await frames(3)
 		label_check(pg2, p)
@@ -556,70 +555,6 @@ func run_assistants() -> void:
 	check(not off[0] and off[1] == "offline", "Ollama éteint -> offline")
 	ctx.ollama.base_url = old_url
 
-	# --- Orchestre : délégation par tool-calling puis repli texte
-	handler = func(path: String, body: Dictionary) -> Dictionary:
-		if path != "/api/chat":
-			return default_handler.call(path, body)
-		var sysmsg: String = body.messages[0].content
-		var last: Dictionary = body.messages.back()
-		if "Tu es Bleu" in sysmsg:
-			return {"code": 200, "lines": [msg_line("func f(): pass"), msg_line("", true)]}
-		if last.role == "tool":
-			return {"code": 200, "lines": [msg_line("Voici : " + str(last.content)), msg_line("", true)]}
-		return {"code": 200, "lines": [{"message": {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "ask_assistant", "arguments": {"nom": "Bleu", "question": "écris f"}}}]}, "done": true}]}
-	var evs: Array = []
-	var orch: Orchestra = ctx.orchestra
-	orch.allow = true
-	orch.resolve_model = func(_a: int) -> String: return "llama3.1:8b"
-	orch.event.connect(func(k, d): evs.append([k, d]))
-	orch.run(0, [{"role": "user", "content": "code ?"}])
-	await wait_for(func(): return not orch.running)
-	var kinds: Array = evs.map(func(e): return e[0])
-	check("card_open" in kinds and "card_done" in kinds and kinds.back() == "done", "délégation Goody -> Bleu (tools) : " + str(kinds.size()))
-	check(evs.filter(func(e): return e[0] == "done").back()[1].text.contains("func f()"), "Goody synthétise la réponse de Bleu")
-	check(orch.cards.size() == 1 and orch.cards[0].answer.contains("func f()"), "réponse de Bleu conservée dans la carte")
-	check(evs.any(func(e): return e[0] == "speaker" and e[1].ai == 0 and e[1].mode == "call") and evs.any(func(e): return e[0] == "speaker" and e[1].ai == 2 and e[1].mode == "listen"), "mascottes : call / listen")
-	# repli texte (modèle sans tools)
-	evs.clear()
-	handler = func(path: String, body: Dictionary) -> Dictionary:
-		if path != "/api/chat":
-			return default_handler.call(path, body)
-		var sysmsg2: String = body.messages[0].content
-		if "Tu es Bleu" in sysmsg2:
-			return {"code": 200, "lines": [msg_line("print(1)"), msg_line("", true)]}
-		if body.messages.back().content.contains("Réponse de Bleu"):
-			return {"code": 200, "lines": [msg_line("Synthèse finale"), msg_line("", true)]}
-		return {"code": 200, "lines": [msg_line("<<ask:Bleu>> écris un print <</ask>>"), msg_line("", true)]}
-	orch.resolve_model = func(_a: int) -> String: return "gemma3:4b"
-	orch.run(0, [{"role": "user", "content": "code ?"}])
-	await wait_for(func(): return not orch.running)
-	var done_ev: Array = evs.filter(func(e): return e[0] == "done")
-	check(not done_ev.is_empty() and "Synthèse finale" in done_ev[0][1].text and "<<" not in done_ev[0][1].text, "repli texte <<ask>> exécuté")
-	check(not requests.filter(func(q): return q.path == "/api/chat" and q.body.get("tools") != null and q.body.model == "gemma3:4b").size() > 0, "pas de tools envoyés au modèle sans tools")
-	# boucle : Bleu tente d'appeler Goody -> refusé
-	evs.clear()
-	handler = func(path: String, body: Dictionary) -> Dictionary:
-		if path != "/api/chat":
-			return default_handler.call(path, body)
-		var sysmsg3: String = body.messages[0].content
-		if "Tu es Bleu" in sysmsg3:
-			return {"code": 200, "lines": [msg_line("<<ask:Goody>> reviens <</ask>>"), msg_line("", true)]}
-		if "Réponse de" in str(body.messages.back().content):
-			return {"code": 200, "lines": [msg_line("ok fini"), msg_line("", true)]}
-		return {"code": 200, "lines": [msg_line("<<ask:Bleu>> vas-y <</ask>>"), msg_line("", true)]}
-	orch.run(0, [{"role": "user", "content": "x"}])
-	await wait_for(func(): return not orch.running)
-	check(orch.calls_used == 1 and evs.any(func(e): return e[0] == "notice" and "Refusé" in e[1].text), "boucle A->B->A refusée")
-	check(evs.back()[0] == "done", "la boucle se termine proprement")
-	# stop global
-	evs.clear()
-	orch.run(0, [{"role": "user", "content": "x"}])
-	await frames(1)
-	orch.stop()
-	await wait_for(func(): return not orch.running)
-	check(evs.any(func(e): return e[0] == "stopped"), "bouton Stop global")
-	orch.allow = true
-
 	# --- Page Chat : état, envoi en streaming, Markdown, assistants, historique, pièces jointes
 	handler = default_handler
 	ctx.models = []
@@ -641,7 +576,6 @@ func run_assistants() -> void:
 	await frames(3)
 	check(chp.chat.assistant == 2 and chp.chat.messages.back().role == "note" and "Bleu rejoint" in chp.chat.messages.back().text, "changer d'assistant : ligne « rejoint la conversation »")
 	check(T.OK == U.color(2) and ctx.active == 2, "thème suit l'assistant actif")
-	check(chp.current_model() == "qwen2.5-coder:7b", "Bleu : modèle code")
 	check(chp.send_text("@Rosie corrige ce texte"), "envoi avec @mention")
 	await wait_for(func(): return not chp.generating)
 	check(chp.chat.assistant == 1 and chp.chat.messages[chp.chat.messages.size() - 2].content == "corrige ce texte", "@mention bascule l'assistant")
@@ -782,7 +716,7 @@ func run_lint(host: Control) -> void:
 	var widths := Lint.T.WIDTHS_TEST if OS.get_environment("GL_LINT_FAST") != "1" else [360, 1100]
 	for n in [0, 1, 7]:
 		ctx.catalog.set_fake(sizes[n])
-		for id in ["home", "chat", "profile", "settings", "about", "welcome", "board", "chat_history", "chat_settings", "app", "kit"]:
+		for id in ["home", "chat", "profile", "settings", "about", "welcome", "chat_history", "chat_settings", "app", "kit"]:
 			if id == "kit" and not Router.PAGES.has("kit"):
 				continue
 			var args := {"name": sizes[n][0].name} if (id == "app" and n > 0) else {}
@@ -842,19 +776,6 @@ func run_lint(host: Control) -> void:
 		node.queue_free()
 		await frames(2)
 	host.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	await frames(2)
-
-
-# ------------------------------------------------------------------ Plan : moteur de scène (test_board.gd)
-
-func run_board() -> void:
-	router.instant = true
-	var pg: Control = router.push("board")
-	await frames(3)
-	var tb = load("res://test_board.gd").new()
-	await tb.run(self, pg)
-	if router.stack.size() > 1:
-		router.back()
 	await frames(2)
 
 

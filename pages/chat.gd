@@ -10,16 +10,7 @@ const Ollama := preload("res://core/ollama.gd")
 const Attach := preload("res://core/attach.gd")
 const Orchestra := preload("res://core/orchestra.gd")
 
-const SUGGEST := {
-	"goody": ["Explique-moi comment fonctionne un signal dans Godot", "Écris-moi un plan de semaine pour apprendre l'espagnol", "Donne-moi 3 idées de mini-jeux à finir en un week-end", "Résume les avantages de Linux pour jouer"],
-	"rosie": ["Corrige ce texte et améliore le style", "Traduis en espagnol : « Je cherche la gare »", "Reformule ce message de façon plus polie", "Écris une courte présentation de mon projet"],
-	"bleu": ["Écris un script GDScript de déplacement 2D", "Pourquoi mon signal ne se déclenche pas ?", "Explique les différences entre _process et _physics_process", "Écris un shader simple de vague"],
-	"ambre": ["Calcule la moyenne et la médiane de cette liste", "Analyse ce fichier CSV joint", "Crée un tableau comparatif de trois options", "Explique comment faire un pourcentage de variation"],
-	"mauve": ["Trouve 10 noms pour un jeu de survie", "Invente un univers de jeu original", "Écris le début d'une histoire mystérieuse", "Propose un système de progression pour un jeu"],
-	"soleil": ["Apprends-moi 10 mots d'espagnol pour voyager", "Conjugue « tener » au présent", "Fais-moi un mini-dialogue au restaurant", "Corrige cette phrase en espagnol"],
-	"braise": ["Comment gagner des FPS sur Arma Reforger ?", "Explique la structure d'un mod Enfusion", "Optimise ma config Linux pour jouer", "Quels réglages graphiques coûtent le plus ?"],
-	"brume": ["Résume ce document joint en 5 points", "Décris cette image", "Quels sont les points clés de ce texte ?", "Extrais les dates importantes du fichier"],
-}
+const SUGGEST := ["Explique-moi simplement comment fonctionne internet", "Aide-moi à écrire un message poli", "Donne-moi 3 idées pour le week-end", "Résume ce texte en quelques points"]
 
 var chat: Dictionary = {}
 var status := "init"  # init | offline | nomodel | ready
@@ -415,7 +406,7 @@ func _render_empty() -> void:
 			return
 	var mo := W.label("« %s »" % u.motto, 15, T.DIM, msgs)
 	mo.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	var sug: Array = SUGGEST.get(u.id, [])
+	var sug: Array = SUGGEST
 	var board := ChatUI.Board.new("Réponses rapides", sug)
 	board.picked.connect(func(s: String): send_text(s))
 	msgs.add_child(board)
@@ -821,7 +812,7 @@ func _generate() -> void:
 	var override: String = str(chat.get("model", ""))
 	var orch: Orchestra = ctx.orchestra
 	orch.ollama = ctx.ollama
-	orch.allow = bool(ctx.store.get_s("chat", "delegate", true))
+	orch.allow = false  # plus de délégation entre assistants
 	orch.extra = str(ctx.store.get_s("chat", "system", ""))
 	orch.opts = {"temperature": float(ctx.store.get_s("chat", "temp", 0.7)), "num_ctx": int(ctx.store.get_s("chat", "num_ctx", 4096)),
 			"user_temp": bool(ctx.store.get_s("chat", "temp_set", false)), "user_temp_v": float(ctx.store.get_s("chat", "temp", 0.7))}

@@ -70,7 +70,7 @@ func finish() -> void:
 		_editor.commit()
 	ctx.store.welcomed = true
 	ctx.store.save_cfg()
-	router.reset(("board" if ctx.start_page() == "chat" else ctx.start_page()))
+	router.reset(ctx.start_page())
 
 
 func on_back() -> bool:

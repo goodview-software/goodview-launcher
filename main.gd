@@ -35,11 +35,21 @@ func _ready() -> void:
 	router.page_changed.connect(_on_page)
 	_restore_window()
 	get_window().content_scale_factor = float(ctx.store.get_s("ui", "scale", 1.0))
-	router.push(("board" if ctx.start_page() == "chat" else ctx.start_page()) if ctx.store.welcomed else "welcome")
+	router.push(ctx.start_page() if ctx.store.welcomed else "welcome")
 	ctx.start()
 	Pixelize.install(self)
+	_add_corner_box()
 	if OS.get_environment("GL_PAGE") != "":  # débogage : ouvre directement une page d'onglet
 		router.go_tab(OS.get_environment("GL_PAGE"))
+
+
+func _add_corner_box() -> void:
+	if not OS.has_feature("pc") or DisplayServer.get_name() == "headless" or OS.get_environment("GL_NOBOX") == "1":
+		return
+	var box: Window = load("res://ui/corner_box.gd").new()
+	box.ctx = ctx
+	box.font = get_theme_default_font()
+	add_child(box)
 
 
 func _on_page(page_title: String) -> void:

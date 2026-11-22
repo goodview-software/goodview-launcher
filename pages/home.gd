@@ -333,19 +333,14 @@ class Sticker extends Control:
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
-## Sous-apps intégrées : Assistant IA (plan 2D de zones) et Chat rapide (conversation classique).
+## Sous-app intégrée : Chat rapide.
 func _assistant_grid() -> Control:
 	var g: Container = K.Grid.new()
 	g.min_card_width = 220
 	g.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var c := AppCard.new()
-	c.btn_text = "Ouvrir"
-	c.setup(Sticker.new(ctx.active, "Assistant IA"), "", "Un plan 2D : des zones pour discuter avec l'IA, reliées par des fils.", ["Intégré", T.OK], false, false)
-	c.pressed.connect(func(): router.push("board"))
-	g.add_child(c)
 	var c2 := AppCard.new()
 	c2.btn_text = "Ouvrir"
-	c2.setup(Sticker.new((ctx.active + 3) % U.count(), "Chat rapide"), "", "Une conversation directe avec %s et 7 autres assistants locaux." % U.get_u(ctx.active).name, ["Intégré", T.OK], false, false)
+	c2.setup(Sticker.new(ctx.active, "Chat rapide"), "", "Pose tes questions à un assistant, en local sur ton PC.", ["Intégré", T.OK], false, false)
 	c2.pressed.connect(func(): router.go_tab("chat"))
 	g.add_child(c2)
 	return g

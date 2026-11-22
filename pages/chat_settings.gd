@@ -140,7 +140,7 @@ func build() -> void:
 		v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		v.add_theme_constant_override("separation", 0)
 		h.add_child(v)
-		W.label("%s%s" % [u.name, "  · chef d'orchestre" if u.role == "general" else ""], 16, Color(str(u.accent)), v)
+		W.label(str(u.name), 16, Color(str(u.accent)), v)
 		W.label(str(u.specialty), 12, T.DIM, v)
 		var m := ctx.model_for(i)
 		var pl := HBoxContainer.new()

@@ -33,15 +33,6 @@ func build() -> void:
 		get_window().content_scale_factor = float(id))
 	c0.add_child(sz)
 	W.hsep(c0)
-	var r00 := W.setting_row(c0, "Les assistants peuvent s'appeler", "Goody et les experts se posent des questions entre eux")
-	var tg0 := W.Toggle.new()
-	tg0.set_on(ctx.orchestra.allow)
-	tg0.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	tg0.toggled.connect(func(on: bool):
-		ctx.orchestra.allow = on
-		ctx.store.set_s("chat", "delegate", on))
-	r00.add_child(tg0)
-	W.hsep(c0)
 	var r01 := W.setting_row(c0, "Réglages du chat", "Ollama, modèles, température, prompt")
 	var b01 := W.IconBtn.new("sliders", 44)
 	b01.pressed.connect(func(): router.push("chat_settings"))

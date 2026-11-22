@@ -10,6 +10,7 @@ config/features=PackedStringArray("4.7")
 [display]
 window/size/viewport_width=1100
 window/size/viewport_height=720
+window/per_pixel_transparency/allowed=true
 
 [rendering]
 

@@ -131,8 +131,8 @@ func _assistant(ai: int, history: Array, depth: int, chain: Array, sink: int, to
 	var can := allow and depth < MAX_DEPTH
 	var sys := U.system_prompt(ai, can)
 	if extra.strip_edges() != "":
-		sys += "\nConsignes de l'utilisateur : " + extra.strip_edges()
-	var msgs: Array = [{"role": "system", "content": sys}] + history
+		sys += extra.strip_edges()
+	var msgs: Array = ([{"role": "system", "content": sys}] if sys != "" else []) + history
 	var text_mode := not Ollama.supports_tools(model)
 	var total := ""
 	var tokens := 0
@@ -143,7 +143,7 @@ func _assistant(ai: int, history: Array, depth: int, chain: Array, sink: int, to
 	o.erase("user_temp_v")
 	if not top:
 		o["num_predict"] = SUB_TOKENS
-	if can and text_mode:
+	if can and text_mode and not msgs.is_empty():
 		msgs[0].content += "\nSi tu as besoin d'un collègue, écris exactement : <<ask:Nom>> question complète <</ask>> puis arrête-toi."
 	for round_i in MAX_ROUNDS + 1:
 		var tools_on := can and calls_used < MAX_CALLS and round_i < MAX_ROUNDS

@@ -59,7 +59,7 @@ func setup(sandbox := false) -> void:
 	chats.load_index()
 	orchestra = Orchestra.new()
 	orchestra.ollama = ollama
-	orchestra.allow = bool(store.get_s("chat", "delegate", true))
+	orchestra.allow = false
 	add_child(orchestra)
 	active = store.avatar
 	T.apply(active)

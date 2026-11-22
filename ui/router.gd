@@ -14,7 +14,6 @@ const PAGES := {
 	"welcome": preload("res://pages/welcome.gd"),
 	"chat": preload("res://pages/chat.gd"),
 	"chat_history": preload("res://pages/chat_history.gd"),
-	"board": preload("res://pages/board.gd"),
 	"chat_settings": preload("res://pages/chat_settings.gd"),
 	"kit": preload("res://pages/kit_page.gd"),
 }
